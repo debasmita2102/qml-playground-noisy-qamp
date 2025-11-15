@@ -284,3 +284,125 @@ def make_bloch_model_plot(bloch_vectors, labels, num_layers, targets=None):
     fig.update_layout(layout)
 
     return fig
+
+
+def make_bloch_comparison_plot(ideal_vectors=None, noisy_vectors=None):
+    """Create a side-by-side Bloch sphere comparison for ideal vs. noisy trajectories."""
+
+    if ideal_vectors is not None:
+        ideal_vectors = np.asarray(ideal_vectors, dtype=float)
+        if ideal_vectors.size == 0:
+            ideal_vectors = None
+        else:
+            ideal_vectors = np.reshape(ideal_vectors, (-1, 3))
+    if noisy_vectors is not None:
+        noisy_vectors = np.asarray(noisy_vectors, dtype=float)
+        if noisy_vectors.size == 0:
+            noisy_vectors = None
+        else:
+            noisy_vectors = np.reshape(noisy_vectors, (-1, 3))
+
+    fig = make_subplots(
+        rows=1,
+        cols=2,
+        specs=[[{'type': 'scene'}, {'type': 'scene'}]],
+        subplot_titles=("Ideal Evolution", "Noisy Evolution"),
+        horizontal_spacing=0.08,
+    )
+
+    ideal_traces, ideal_annotations = make_bloch_sphere()
+    noisy_traces, noisy_annotations = make_bloch_sphere()
+
+    for trace in ideal_traces:
+        trace.update(showlegend=False)
+        fig.add_trace(trace, row=1, col=1)
+
+    for trace in noisy_traces:
+        trace.update(showlegend=False)
+        fig.add_trace(trace, row=1, col=2)
+
+    if ideal_vectors is not None:
+        fig.add_trace(
+            go.Scatter3d(
+                x=ideal_vectors[:, 0],
+                y=ideal_vectors[:, 1],
+                z=ideal_vectors[:, 2],
+                mode='lines+markers',
+                line=dict(color='#1f77b4', width=4),
+                marker=dict(size=3, color='#1f77b4'),
+                name='Ideal Trajectory'
+            ),
+            row=1,
+            col=1
+        )
+
+    if noisy_vectors is not None:
+        fig.add_trace(
+            go.Scatter3d(
+                x=noisy_vectors[:, 0],
+                y=noisy_vectors[:, 1],
+                z=noisy_vectors[:, 2],
+                mode='lines+markers',
+                line=dict(color='#d62728', width=4),
+                marker=dict(size=3, color='#d62728'),
+                name='Noisy Trajectory'
+            ),
+            row=1,
+            col=2
+        )
+
+    axes_config = dict(
+        backgroundcolor="white",
+        autorange=True,
+        showgrid=False,
+        zeroline=False,
+        showline=False,
+        ticks='',
+        showticklabels=False,
+    )
+
+    camera = dict(
+        up=dict(x=0, y=0, z=1),
+        center=dict(x=0, y=0, z=0),
+        eye=dict(x=0.75, y=0.75, z=0.75)
+    )
+
+    layout = dict(
+        autosize=False,
+        width=650,
+        height=320,
+        margin=dict(b=0, t=40, l=0, r=0),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.08,
+            xanchor="center",
+            x=0.5
+        )
+    )
+
+    layout["scene"] = dict(
+        xaxis_title='',
+        yaxis_title='',
+        zaxis_title='',
+        annotations=ideal_annotations,
+        xaxis=axes_config,
+        yaxis=axes_config,
+        zaxis=axes_config,
+    )
+    layout["scene_camera"] = camera
+
+    layout["scene2"] = dict(
+        xaxis_title='',
+        yaxis_title='',
+        zaxis_title='',
+        annotations=noisy_annotations,
+        xaxis=axes_config,
+        yaxis=axes_config,
+        zaxis=axes_config,
+    )
+    layout["scene2_camera"] = camera
+
+    fig.update_layout(layout)
+
+    return fig

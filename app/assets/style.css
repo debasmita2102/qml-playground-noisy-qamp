@@ -139,6 +139,11 @@ h2 {
     margin-top: 5px;
 }
 
+.noise-slider {
+    margin-top: 12px;
+    margin-bottom: 8px;
+}
+
 .rc-slider-track {
   background-color: #009374;
 }
@@ -274,5 +279,4 @@ h2 {
 .icon-step:before {
   content: "\23EF";
 }
-
 

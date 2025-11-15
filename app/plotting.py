@@ -12,7 +12,12 @@ import plotly.express as px
 import plotly.graph_objs as go
 from plotly.subplots import make_subplots
 
-from visualization.single_qubit import make_bloch_plot, make_bloch_model_plot, make_bloch_state_traces
+from visualization.single_qubit import (
+    make_bloch_plot,
+    make_bloch_model_plot,
+    make_bloch_state_traces,
+    make_bloch_comparison_plot,
+)
 from visualization.two_qubits import make_tetrahedron_plot, make_tetrahedron_model_plot, make_tetrahedron_state_traces
 from utils.metrics import compute_combined_metric, normalize_metrics, get_color_from_combined_metric
 
@@ -72,6 +77,11 @@ def make_state_space_model_plot(num_qubits, states, labels, num_layers, targets=
         return make_tetrahedron_model_plot(states, labels, num_layers, targets)
     else:
         raise NotImplementedError("num_qubits must be 1 or 2")
+
+
+def make_noise_comparison_plot(ideal_states=None, noisy_states=None):
+    """Wrapper to build the ideal vs. noisy Bloch sphere visualization."""
+    return make_bloch_comparison_plot(ideal_states, noisy_states)
 
 
 def make_state_traces(num_qubits, states, labels, num_classes=None):

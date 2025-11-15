@@ -213,12 +213,91 @@ result_plot = html.Div([
     ),
 ], className="container")
 
+noise_simulator_panel = html.Div([
+    html.H2("Noise Simulator"),
+    html.Div([
+        dcc.Graph(
+            id="graph_noise_comparison",
+            style={"width": 650, "height": 320}
+        ),
+        html.Div([
+            html.Div([
+                html.Label("Noise Type", style={"fontWeight": "600", "marginBottom": "6px"}),
+                dcc.Dropdown(
+                    id="select_noise_type",
+                    options=[
+                        {"label": "Depolarizing", "value": "Depolarizing"},
+                        {"label": "Amplitude", "value": "Amplitude"},
+                        {"label": "Phase", "value": "Phase"},
+                    ],
+                    value="Depolarizing",
+                    clearable=False,
+                    style={"width": "100%"}
+                ),
+            ], style={"marginBottom": "18px"}),
+            html.Div([
+                html.Label("Depolarizing Probability", style={"fontWeight": "600"}),
+                html.Span("(dep only)", style={"color": "#6c757d", "fontSize": "12px", "marginLeft": "6px"}),
+                dcc.Slider(
+                    id="slider_depolarizing_probability",
+                    min=0.0,
+                    max=0.5,
+                    step=0.01,
+                    value=0.1,
+                    marks=None,
+                    tooltip={"placement": "bottom", "always_visible": True},
+                    className="noise-slider",
+                ),
+                html.Div([
+                    html.Span("0.0", style={"fontSize": "12px", "color": "#6c757d"}),
+                    html.Span("0.5", style={"fontSize": "12px", "color": "#6c757d"})
+                ], style={"display": "flex", "justifyContent": "space-between", "marginTop": "4px"})
+            ], style={"marginBottom": "20px"}),
+            html.Div([
+                html.Label("Damping Rate (gamma)", style={"fontWeight": "600"}),
+                dcc.Slider(
+                    id="slider_damping_rate",
+                    min=0.0,
+                    max=1.0,
+                    step=0.01,
+                    value=0.2,
+                    marks=None,
+                    tooltip={"placement": "bottom", "always_visible": True},
+                    className="noise-slider",
+                ),
+                html.Div([
+                    html.Span("0.0", style={"fontSize": "12px", "color": "#6c757d"}),
+                    html.Span("1.0", style={"fontSize": "12px", "color": "#6c757d"})
+                ], style={"display": "flex", "justifyContent": "space-between", "marginTop": "4px"})
+            ]),
+        ], className="columnContainer",
+            style={
+                "width": "32%",
+                "minWidth": "240px",
+                "backgroundColor": "rgba(255, 255, 255, 0.75)",
+                "borderRadius": "10px",
+                "padding": "18px 20px",
+                "boxShadow": "0 10px 30px rgba(0, 0, 0, 0.05)",
+            }
+        ),
+    ], className="rowContainer",
+        style={"justify-content": "space-between", "align-items": "stretch", "gap": "24px"}
+    ),
+    dcc.Interval(
+        id="noise_animation_interval",
+        interval=200,
+        n_intervals=0
+    ),
+], className="longContainer container")
+
 # Overall
 layout_rows = [
     dcc.Store(id="simulation_state"),
     dcc.Store(id="train_datastore"),
     dcc.Store(id="test_datastore"),
     dcc.Store(id="model_parameters"),
+    dcc.Store(id="noise_trajectory_store"),
+    dcc.Store(id="noise_animation_state", data={"frame": 0, "version": None}),
     dcc.Store(id="metrics"),
     dcc.Store(id="quantum_state_store"),
     dcc.Store(id="predicted_test_labels"),
@@ -231,6 +310,9 @@ layout_rows = [
     ], className="rowContainer"),
     html.Div([
         data_settings, model_plot, result_plot,
+    ], className="rowContainer"),
+    html.Div([
+        noise_simulator_panel,
     ], className="rowContainer"),
     html.Div([
         html.Img(src="assets/aisec.png")

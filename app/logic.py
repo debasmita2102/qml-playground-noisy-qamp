@@ -1,5 +1,6 @@
 import logging
 import json
+import time
 from io import StringIO
 
 import pandas as pd
@@ -17,6 +18,7 @@ from models.reuploading_regressor import QuantumReuploadingRegressor
 
 from utils.serialization import serialize_quantum_states, unserialize_quantum_states, unserialize_model_dict
 from utils.trace_updates import create_extendData_dicts
+from utils.noise_simulator_mock import generate_mock_trajectories
 
 from layout import layout_overall
 from plotting import *
@@ -258,6 +260,96 @@ def reset_results_plot(num_clicks: int, num_qubits: int, num_layers: int, select
     else:
         graph_results = make_result_plot(points=None, predictions=None, labels=None, dataset=selected_data_set)
     return [graph_results]
+
+
+@qml_app.callback(
+    Output(component_id="noise_trajectory_store", component_property="data"),
+    inputs=[
+        Input(component_id="select_noise_type", component_property="value"),
+        Input(component_id="slider_depolarizing_probability", component_property="value"),
+        Input(component_id="slider_damping_rate", component_property="value"),
+    ],
+    prevent_initial_call=False,
+)
+def update_noise_simulator(noise_type: str,
+                           depolarizing_probability: float,
+                           damping_rate: float):
+    """
+    Generate mock trajectories for ideal vs. noisy state evolution and store them for animation.
+    """
+    if noise_type is None:
+        return dash.no_update
+
+    depolarizing_probability = depolarizing_probability or 0.0
+    damping_rate = damping_rate or 0.0
+
+    trajectory_data = generate_mock_trajectories(
+        noise_type=noise_type,
+        depolarizing_probability=depolarizing_probability,
+        damping_rate=damping_rate,
+    )
+    logger.info(
+        "Stored mock trajectory meta: %s",
+        trajectory_data.get("meta"),
+    )
+    trajectory_data["version"] = time.time_ns()
+
+    return trajectory_data
+
+
+@qml_app.callback(
+    [
+        Output(component_id="graph_noise_comparison", component_property="figure"),
+        Output(component_id="noise_animation_state", component_property="data"),
+    ],
+    inputs=[
+        Input(component_id="noise_animation_interval", component_property="n_intervals"),
+        Input(component_id="noise_trajectory_store", component_property="data"),
+    ],
+    state=[
+        State(component_id="noise_animation_state", component_property="data"),
+    ],
+    prevent_initial_call=False,
+)
+def animate_noise_simulator(interval_count: int,
+                            trajectory_data,
+                            animation_state):
+    """
+    Animate the mock noise trajectories by progressively revealing Bloch sphere paths.
+    """
+    if trajectory_data is None:
+        base_fig = make_noise_comparison_plot()
+        return base_fig, {"frame": 0, "version": None}
+
+    if animation_state is None:
+        animation_state = {"frame": 0, "version": None}
+
+    version = trajectory_data.get("version")
+    total_steps = len(trajectory_data.get("time", []))
+    total_steps = max(total_steps, 1)
+
+    triggered_id = ctx.triggered_id
+
+    if triggered_id == "noise_trajectory_store" or animation_state.get("version") != version:
+        frame_idx = 0
+    else:
+        frame_idx = (animation_state.get("frame", 0) + 1) % total_steps
+
+    ideal_vectors = trajectory_data["ideal"][:frame_idx + 1]
+    noisy_vectors = trajectory_data["noisy"][:frame_idx + 1]
+
+    comparison_fig = make_noise_comparison_plot(
+        ideal_vectors,
+        noisy_vectors,
+    )
+
+    new_animation_state = {
+        "frame": frame_idx,
+        "version": version,
+        "total_steps": total_steps,
+    }
+
+    return comparison_fig, new_animation_state
 
 
 @qml_app.callback(
