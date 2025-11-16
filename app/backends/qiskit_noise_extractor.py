@@ -1,7 +1,11 @@
 # noise_models/qiskit_noise_extractor.py
 """
-Noise extractor: builds a simple depolarizing NoiseModel and runs circuits using AerSimulator.
+Noise extractor: builds a simple depolarizing / amplitude-damping NoiseModel and runs circuits using AerSimulator.
 This version is a bit more tolerant to Qiskit/Aer variations and returns numpy complex128 arrays.
+
+Added options:
+ - error_kind: "depolarizing" (default) | "amplitude_damping"
+ - p_amp: amplitude damping probability for single-qubit amplitude damping errors
 """
 from typing import Optional
 import numpy as _np
@@ -28,17 +32,30 @@ else:
 
 
 class NoiseExtractor:
-    """Build and run simple depolarizing noise models using Qiskit Aer.
+    """Build and run simple noise models (depolarizing and/or amplitude damping) using Qiskit Aer.
 
     Parameters
     ----------
     p_1qubit : float
-        Depolarizing error probability for 1-qubit gates (default 0.001)
+        Depolarizing error probability for 1-qubit gates (default 0.001). Used when error_kind includes depolarizing.
     p_2qubit : float
-        Depolarizing error probability for 2-qubit gates (default 0.01)
+        Depolarizing error probability for 2-qubit gates (default 0.01).
+    error_kind : str
+        One of "depolarizing" (default) or "amplitude_damping".
+        - "depolarizing": single-qubit gates get depolarizing_error(p_1qubit)
+        - "amplitude_damping": single-qubit gates get amplitude_damping_error(p_amp)
+    p_amp : Optional[float]
+        Amplitude damping probability to use when error_kind == "amplitude_damping".
+        If not provided, p_1qubit is used as damping probability.
     """
 
-    def __init__(self, p_1qubit: float = 0.001, p_2qubit: float = 0.01):
+    def __init__(
+        self,
+        p_1qubit: float = 0.001,
+        p_2qubit: float = 0.01,
+        error_kind: str = "depolarizing",
+        p_amp: Optional[float] = None,
+    ):
         if _IMPORT_ERROR is not None:
             raise RuntimeError(
                 "qiskit / qiskit-aer not available: install 'qiskit-aer' and 'qiskit' to use NoiseExtractor"
@@ -47,27 +64,59 @@ class NoiseExtractor:
 
         self.p_1qubit = float(p_1qubit)
         self.p_2qubit = float(p_2qubit)
+        self.error_kind = str(error_kind).lower()
+        self.p_amp = float(p_amp) if p_amp is not None else self.p_1qubit
 
-        # build a simple depolarizing noise model and an AerSimulator configured for density-matrix
+        # build a simple noise model and an AerSimulator configured for density-matrix
         self.noise_model = self._build_noise_model()
         # create simulator; allow user to override options later if needed
+        # we use density_matrix method by default so we can extract density matrices
         self.simulator = AerSimulator(noise_model=self.noise_model, method="density_matrix")
 
     def _build_noise_model(self) -> NoiseModel:
-        """Create a NoiseModel with depolarizing errors applied to common 1- and 2-qubit gates."""
-        err_1q = noise.depolarizing_error(self.p_1qubit, 1)
+        """Create a NoiseModel with errors applied to common 1- and 2-qubit gates.
+
+        Single-qubit errors are chosen by `self.error_kind`. Two-qubit gates use depolarizing error.
+        """
+        # build single-qubit error according to requested kind
+        if self.error_kind == "amplitude_damping":
+            try:
+                err_1q = noise.amplitude_damping_error(self.p_amp)
+            except Exception as e:
+                # some qiskit-aer versions might use a different path for amplitude damping error
+                raise RuntimeError(f"Failed to create amplitude damping error: {e}") from e
+        else:
+            # default: depolarizing single-qubit error
+            err_1q = noise.depolarizing_error(self.p_1qubit, 1)
+
+        # two-qubit depolarizing error (for CX/CZ/SWAP)
         err_2q = noise.depolarizing_error(self.p_2qubit, 2)
 
         nm = NoiseModel()
 
         one_q_gates = [
-            "u1", "u2", "u3", "x", "y", "z", "h", "s", "sdg", "t", "tdg", "rx", "ry", "rz",
+            "u1",
+            "u2",
+            "u3",
+            "x",
+            "y",
+            "z",
+            "h",
+            "s",
+            "sdg",
+            "t",
+            "tdg",
+            "rx",
+            "ry",
+            "rz",
         ]
         two_q_gates = ["cx", "cz", "swap"]
 
+        # attach single-qubit error to all common single-qubit gates
         for g in one_q_gates:
             nm.add_all_qubit_quantum_error(err_1q, g)
 
+        # attach two-qubit depolarizing errors to common two-qubit gates
         for g in two_q_gates:
             nm.add_all_qubit_quantum_error(err_2q, g)
 
@@ -81,7 +130,7 @@ class NoiseExtractor:
         self.noise_model = nm
         self.simulator = AerSimulator(noise_model=self.noise_model, method="density_matrix")
         return nm
-    
+
     def simulate_circuit(self, qc: QuantumCircuit, shots: int = 1) -> _np.ndarray:
         """
         Short, modern simulate_circuit for Aer builds that store final state under

@@ -276,35 +276,3 @@ class NoisyMLSimulator(StateVecSimTorch):
             },
             "qiskit_circuit": qc,
         }
-
-
-# -----------------------
-# Quick local smoke-test when run as script (non-exhaustive)
-# -----------------------
-if __name__ == "__main__":
-    import torch
-
-    print("Running quick NoisyMLSimulator smoke test (ideal-only if Qiskit not installed).")
-
-    sim = NoisyMLSimulator(
-        n_qubits=1,
-        n_layers=1,
-        p_1qubit=0.001,
-        p_2qubit=0.01,
-        track_noise=True,
-        gpu=False,
-        seed=123,
-    )
-
-    X = torch.rand(1, 3)
-    sim.forward(X)
-    angles = sim.get_angles(X)  # shape (1, n_layers, n_qubits, 3)
-
-    # apply Rot on sample 0 / layer 0 / all qubits
-    sim.Rot(angles[:, 0, :, :])
-    sim.H([0], 1)
-
-    comp = sim.get_comparison()
-    print("Ideal fidelity:", comp["ideal"]["fidelity"])
-    print("Noisy fidelity:", comp["noisy"]["fidelity"])
-    print("Qiskit circuit:\n", comp["qiskit_circuit"].draw() if comp.get("qiskit_circuit") is not None else "None")
