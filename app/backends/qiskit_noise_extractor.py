@@ -30,6 +30,7 @@ except Exception as e_a:
 else:
     _IMPORT_ERROR = None
 
+__all__ = ["NoiseExtractor"]
 
 class NoiseExtractor:
     """Build and run simple noise models (depolarizing and/or amplitude damping) using Qiskit Aer.

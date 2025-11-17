@@ -13,39 +13,13 @@ Design goals:
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 import numpy as np
-from qiskit_noise_extractor import NoiseExtractor
+from .qiskit_noise_extractor import NoiseExtractor
+from .torch_state_vector_simulator import StateVecSimTorch
+from .circuit_bridge import CircuitBridge
 
-# --- Defensive imports for project modules (required) ---
-_import_issues: list[Tuple[str, Exception]] = []
-
-try:
-    # expected to be your file statevec_sim_torch.py in same folder/package
-    from torch_state_vector_simulator import StateVecSimTorch
-except Exception as e:
-    _import_issues.append(("statevec_sim_torch", e))
-    StateVecSimTorch = None  # type: ignore
-
-try:
-    # expected to be your file circuit_bridge.py in same folder/package
-    from circuit_bridge import CircuitBridge
-except Exception as e:
-    _import_issues.append(("circuit_bridge", e))
-    CircuitBridge = None  # type: ignore
-
-# If any core dependency is not importable, raise an informative ImportError
-if StateVecSimTorch is None or CircuitBridge is None:
-    msgs = "\n".join([f"{name}: {type(err).__name__}: {err}" for name, err in _import_issues])
-    raise ImportError(
-        "Failed to import required backend modules for NoisyMLSimulator.\n"
-        "Please ensure the following files are on PYTHONPATH and import without error:\n"
-        "  - statevec_sim_torch.py (defines StateVecSimTorch)\n"
-        "  - circuit_bridge.py (defines CircuitBridge)\n\n"
-        "Detailed import issues:\n" + msgs
-    )
-
-
+__all__ = ["NoisyMLSimulator"]
 
 class NoisyMLSimulator(StateVecSimTorch):
     """
