@@ -9,7 +9,6 @@ try:
     from qiskit_aer.noise import NoiseModel
 except Exception as e_a:
     try:
-        # fallback namespace used by some qiskit installs
         from qiskit import QuantumCircuit
         from qiskit.providers.aer import AerSimulator
         from qiskit.providers.aer.noise import NoiseModel
@@ -57,9 +56,6 @@ class NoiseExtractor:
         self.noise_model = self._build_noise_model()
         self.simulator = AerSimulator(noise_model=self.noise_model, method="density_matrix")
 
-    # ---------------------------
-    # Kraus builders (single-qubit)
-    # ---------------------------
     @staticmethod
     def _kraus_amplitude_damping(gamma: float):
         k0 = _np.array([[1.0, 0.0], [0.0, _np.sqrt(max(0.0, 1.0 - gamma))]], dtype=_np.complex128)
@@ -87,9 +83,6 @@ class NoiseExtractor:
         kz = sq(p / 4.0) * _np.array([[1.0, 0.0], [0.0, -1.0]], dtype=_np.complex128)
         return [k0, kx, ky, kz]
 
-    # ---------------------------
-    # Build NoiseModel
-    # ---------------------------
     def _build_noise_model(self) -> NoiseModel:
         """Create a NoiseModel with errors applied to common 1- and 2-qubit gates.
 
@@ -116,11 +109,9 @@ class NoiseExtractor:
                 except Exception as e:
                     raise RuntimeError(f"Failed to construct phase damping error: {e}") from e
         else:
-            # fallback: depolarizing
             try:
                 single_q_error = noise.depolarizing_error(self.p_1qubit, 1)
             except Exception:
-                # fallback to kraus depolarizing
                 ks = self._kraus_depolarizing(self.p_1qubit)
                 single_q_error = noise.kraus_error(ks)
 
@@ -172,9 +163,6 @@ class NoiseExtractor:
         self.simulator = AerSimulator(noise_model=self.noise_model, method="density_matrix")
         return nm
 
-    # ---------------------------
-    # Multi-qubit helpers and validators
-    # ---------------------------
     @staticmethod
     def _validate_density_matrix(rho: _np.ndarray):
         if rho is None:
@@ -184,14 +172,12 @@ class NoiseExtractor:
         if rho.ndim != 2 or rho.shape[0] != rho.shape[1]:
             raise ValueError("rho must be a square 2D density matrix")
         dim = rho.shape[0]
-        # check power-of-two
         if (dim & (dim - 1)) != 0:
             raise ValueError("rho dimension must be a power of two (2^n x 2^n)")
 
     @staticmethod
     def _num_qubits_from_rho(rho: _np.ndarray) -> int:
         dim = rho.shape[0]
-        # avoid floating log inaccuracies
         n = int(round(_np.log2(dim)))
         return n
 
@@ -203,12 +189,11 @@ class NoiseExtractor:
         """
 
         ops = []
-        for q in range(n_qubits - 1, -1, -1):  # build left-to-right for np.kron chaining
+        for q in range(n_qubits - 1, -1, -1):
             if q == target:
                 ops.append(single_op)
             else:
                 ops.append(_np.eye(2, dtype=_np.complex128))
-        # chain with np.kron: reduce from left to right
         full = ops[0]
         for op in ops[1:]:
             full = _np.kron(full, op)
@@ -326,7 +311,6 @@ class NoiseExtractor:
         except Exception:
             method = ""
 
-        # add compatible save instruction
         if "density" in method:
             try:
                 qc_run.save_density_matrix(label="density_matrix")
@@ -347,7 +331,6 @@ class NoiseExtractor:
         def _to_ndarray(obj):
             if obj is None:
                 return None
-            # raw numpy array
             if isinstance(obj, _np.ndarray):
                 return _np.asarray(obj, dtype=_np.complex128)
             if hasattr(obj, "data"):

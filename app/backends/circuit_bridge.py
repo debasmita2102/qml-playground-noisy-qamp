@@ -1,8 +1,3 @@
-
-# --------------------------------------------------------
-# circuit_bridge.py
-# --------------------------------------------------------
-
 from typing import List, Dict, Any
 from qiskit import QuantumCircuit
 __all__ = ["CircuitBridge"]
