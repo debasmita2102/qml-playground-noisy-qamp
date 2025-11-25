@@ -15,9 +15,9 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, Optional
 import numpy as np
-from .qiskit_noise_extractor import NoiseExtractor
-from .torch_state_vector_simulator import StateVecSimTorch
-from .circuit_bridge import CircuitBridge
+from app.backends.qiskit_noise_extractor import NoiseExtractor
+from app.backends.circuit_bridge import CircuitBridge
+from app.backends.torch_state_vector_simulator import StateVecSimTorch
 
 __all__ = ["NoisyMLSimulator"]
 
@@ -59,25 +59,16 @@ class NoisyMLSimulator(StateVecSimTorch):
         self.p_2qubit = float(p_2qubit)
         self.track_noise = bool(track_noise)
 
-        # Bridge records gate list (name, qubits, params)
         self.circuit_bridge = CircuitBridge(n_qubits=self.n_qubits)
 
-        # Noise extractor: optional
-                # Noise extractor: required when track_noise=True
         self.noise_extractor: Optional[Any] = None
         if self.track_noise:
-            # If NoiseExtractor import was detected at module import-time
-                    # Try to construct — fail loudly if constructor raises
                 self.noise_extractor = NoiseExtractor(p_1qubit=self.p_1qubit, p_2qubit=self.p_2qubit)
                 
-          
-        # Storage for ideal states (snapshots) and Bloch trajectory (for single-qubit)
         self.ideal_states: list = []
         self.ideal_bloch_trajectory: list = []
 
-    # -----------------------
-    # Overridden hooks to record gates
-    # -----------------------
+   
     def forward(self, X):
         """
         Reset trackers and call parent forward which initializes `self.state`.
@@ -108,12 +99,10 @@ class NoisyMLSimulator(StateVecSimTorch):
         final_state = super().Rot(X)
         try:
             angles_batch = X.detach().cpu().numpy()
-            # record rotations for the *first* sample in batch (common training pattern)
             for q in range(self.n_qubits):
                 angles = angles_batch[0, q].tolist()
                 self.circuit_bridge.record_gate("ROT", [q], params={"angles": angles})
         except Exception:
-            # If shapes differ, skip recording but still allow execution
             pass
         self.ideal_states.append(final_state.clone().detach().cpu())
         if self.n_qubits == 1:
@@ -123,7 +112,6 @@ class NoisyMLSimulator(StateVecSimTorch):
     def CNOT(self, qubit_map, n_samples):
         """Apply CNOTs, record them in canonical (control, target) pairs."""
         final_state = super().CNOT(qubit_map, n_samples)
-        # normalize mapping
         if qubit_map == "next" or qubit_map == "ring":
             qs = [(i, i + 1) for i in range(self.n_qubits - 1)]
             if qubit_map == "ring" and self.n_qubits > 2:
@@ -137,11 +125,9 @@ class NoisyMLSimulator(StateVecSimTorch):
             self.ideal_bloch_trajectory.append(self._state_to_bloch(final_state))
         return final_state
 
-    # (You can add similar wrappers for X,Y,Z, RX, RY, RZ, CZ, SWAP if you use them.)
+    # ( add similar wrappers for X,Y,Z, RX, RY, RZ, CZ, SWAP )
 
-    # -----------------------
-    # Utility helpers (density, partial trace, Bloch)
-    # -----------------------
+
     def _statevector_to_density(self, state_vec_torch):
         """Assumes state_vec_torch shape (batch, dim). Returns density matrix for first sample (numpy)."""
         sv = state_vec_torch.detach().cpu().numpy()
@@ -158,7 +144,6 @@ class NoisyMLSimulator(StateVecSimTorch):
         Qubit indexing: 0..n_qubits-1 (keeps semantics consistent with your StateVecSimTorch).
         """
         n = self.n_qubits
-        # reshape into tensor with 2 dims per qubit: (2,)*n for rows and same for cols
         rho_reshaped = rho.reshape([2] * n * 2)
         rows = list(range(0, n))
         cols = list(range(n, 2 * n))
@@ -192,9 +177,6 @@ class NoisyMLSimulator(StateVecSimTorch):
         reduced = self._reduced_density(rho, keep=0)
         return self._density_to_bloch(reduced)
 
-    # -----------------------
-    # High-level comparison API
-    # -----------------------
     def get_comparison(self) -> Dict[str, Any]:
         """
         Returns:

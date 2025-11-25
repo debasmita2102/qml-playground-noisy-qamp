@@ -1,12 +1,3 @@
-# noise_models/qiskit_noise_extractor.py
-"""
-Noise extractor: builds a simple depolarizing / amplitude-damping NoiseModel and runs circuits using AerSimulator.
-This version is a bit more tolerant to Qiskit/Aer variations and returns numpy complex128 arrays.
-
-Added options:
- - error_kind: "depolarizing" (default) | "amplitude_damping"
- - p_amp: amplitude damping probability for single-qubit amplitude damping errors
-"""
 from typing import Optional
 import numpy as _np
 
@@ -33,21 +24,13 @@ else:
 __all__ = ["NoiseExtractor"]
 
 class NoiseExtractor:
-    """Build and run simple noise models (depolarizing and/or amplitude damping) using Qiskit Aer.
+    """Build and run simple noise models (depolarizing and/or amplitude damping/phase damping)
+    using Qiskit Aer.
 
-    Parameters
-    ----------
-    p_1qubit : float
-        Depolarizing error probability for 1-qubit gates (default 0.001). Used when error_kind includes depolarizing.
-    p_2qubit : float
-        Depolarizing error probability for 2-qubit gates (default 0.01).
-    error_kind : str
-        One of "depolarizing" (default) or "amplitude_damping".
-        - "depolarizing": single-qubit gates get depolarizing_error(p_1qubit)
-        - "amplitude_damping": single-qubit gates get amplitude_damping_error(p_amp)
-    p_amp : Optional[float]
-        Amplitude damping probability to use when error_kind == "amplitude_damping".
-        If not provided, p_1qubit is used as damping probability.
+    Multi-qubit numpy-channel helpers apply *local* single-qubit channels independently
+    to a set of target qubits (default: all qubits). Target indexing uses the convention
+    that qubit 0 is the least-significant / right-most tensor factor when forming kronecker
+    products (i.e., ordering matches numpy.kron(..., q2, q1, q0)).
     """
 
     def __init__(
@@ -56,6 +39,7 @@ class NoiseExtractor:
         p_2qubit: float = 0.01,
         error_kind: str = "depolarizing",
         p_amp: Optional[float] = None,
+        p_phase: Optional[float] = None,
     ):
         if _IMPORT_ERROR is not None:
             raise RuntimeError(
@@ -67,31 +51,83 @@ class NoiseExtractor:
         self.p_2qubit = float(p_2qubit)
         self.error_kind = str(error_kind).lower()
         self.p_amp = float(p_amp) if p_amp is not None else self.p_1qubit
+        self.p_phase = float(p_phase) if p_phase is not None else self.p_1qubit
 
-        # build a simple noise model and an AerSimulator configured for density-matrix
+        # Build noise model & simulator
         self.noise_model = self._build_noise_model()
-        # create simulator; allow user to override options later if needed
-        # we use density_matrix method by default so we can extract density matrices
         self.simulator = AerSimulator(noise_model=self.noise_model, method="density_matrix")
 
+    # ---------------------------
+    # Kraus builders (single-qubit)
+    # ---------------------------
+    @staticmethod
+    def _kraus_amplitude_damping(gamma: float):
+        k0 = _np.array([[1.0, 0.0], [0.0, _np.sqrt(max(0.0, 1.0 - gamma))]], dtype=_np.complex128)
+        k1 = _np.array([[0.0, _np.sqrt(max(0.0, gamma))], [0.0, 0.0]], dtype=_np.complex128)
+        return [k0, k1]
+
+    @staticmethod
+    def _kraus_phase_damping(p: float):
+        I = _np.eye(2, dtype=_np.complex128)
+        k0 = _np.sqrt(max(0.0, 1.0 - p)) * I
+        k1 = _np.sqrt(max(0.0, p)) * _np.array([[1.0, 0.0], [0.0, 0.0]], dtype=_np.complex128)
+        k2 = _np.sqrt(max(0.0, p)) * _np.array([[0.0, 0.0], [0.0, 1.0]], dtype=_np.complex128)
+        return [k0, k1, k2]
+
+    @staticmethod
+    def _kraus_depolarizing(p: float):
+        """Single-qubit Kraus operators for depolarizing channel with parameter p:
+           E(rho) = (1-p) rho + p I/2. Equivalent Kraus set: {sqrt(1-3p/4) I, sqrt(p/4) X, sqrt(p/4) Y, sqrt(p/4) Z}
+        """
+        p = float(p)
+        sq = lambda x: _np.sqrt(max(0.0, x))
+        k0 = sq(1.0 - 3.0 * p / 4.0) * _np.eye(2, dtype=_np.complex128)
+        kx = sq(p / 4.0) * _np.array([[0.0, 1.0], [1.0, 0.0]], dtype=_np.complex128)
+        ky = sq(p / 4.0) * _np.array([[0.0, -1j], [1j, 0.0]], dtype=_np.complex128)
+        kz = sq(p / 4.0) * _np.array([[1.0, 0.0], [0.0, -1.0]], dtype=_np.complex128)
+        return [k0, kx, ky, kz]
+
+    # ---------------------------
+    # Build NoiseModel
+    # ---------------------------
     def _build_noise_model(self) -> NoiseModel:
         """Create a NoiseModel with errors applied to common 1- and 2-qubit gates.
 
         Single-qubit errors are chosen by `self.error_kind`. Two-qubit gates use depolarizing error.
         """
-        # build single-qubit error according to requested kind
+        single_q_error = None
+
         if self.error_kind == "amplitude_damping":
             try:
-                err_1q = noise.amplitude_damping_error(self.p_amp)
-            except Exception as e:
-                # some qiskit-aer versions might use a different path for amplitude damping error
-                raise RuntimeError(f"Failed to create amplitude damping error: {e}") from e
+                single_q_error = noise.amplitude_damping_error(self.p_amp)
+            except Exception:
+                try:
+                    ks = self._kraus_amplitude_damping(self.p_amp)
+                    single_q_error = noise.kraus_error(ks)
+                except Exception as e:
+                    raise RuntimeError(f"Failed to construct amplitude damping error: {e}") from e
+        elif self.error_kind == "phase_damping":
+            try:
+                single_q_error = noise.phase_damping_error(self.p_phase)
+            except Exception:
+                try:
+                    ks = self._kraus_phase_damping(self.p_phase)
+                    single_q_error = noise.kraus_error(ks)
+                except Exception as e:
+                    raise RuntimeError(f"Failed to construct phase damping error: {e}") from e
         else:
-            # default: depolarizing single-qubit error
-            err_1q = noise.depolarizing_error(self.p_1qubit, 1)
+            # fallback: depolarizing
+            try:
+                single_q_error = noise.depolarizing_error(self.p_1qubit, 1)
+            except Exception:
+                # fallback to kraus depolarizing
+                ks = self._kraus_depolarizing(self.p_1qubit)
+                single_q_error = noise.kraus_error(ks)
 
-        # two-qubit depolarizing error (for CX/CZ/SWAP)
-        err_2q = noise.depolarizing_error(self.p_2qubit, 2)
+        try:
+            err_2q = noise.depolarizing_error(self.p_2qubit, 2)
+        except Exception as e:
+            raise RuntimeError(f"Failed to create two-qubit depolarizing error: {e}") from e
 
         nm = NoiseModel()
 
@@ -113,13 +149,17 @@ class NoiseExtractor:
         ]
         two_q_gates = ["cx", "cz", "swap"]
 
-        # attach single-qubit error to all common single-qubit gates
         for g in one_q_gates:
-            nm.add_all_qubit_quantum_error(err_1q, g)
+            try:
+                nm.add_all_qubit_quantum_error(single_q_error, g)
+            except Exception:
+                pass
 
-        # attach two-qubit depolarizing errors to common two-qubit gates
         for g in two_q_gates:
-            nm.add_all_qubit_quantum_error(err_2q, g)
+            try:
+                nm.add_all_qubit_quantum_error(err_2q, g)
+            except Exception:
+                pass
 
         return nm
 
@@ -132,6 +172,138 @@ class NoiseExtractor:
         self.simulator = AerSimulator(noise_model=self.noise_model, method="density_matrix")
         return nm
 
+    # ---------------------------
+    # Multi-qubit helpers and validators
+    # ---------------------------
+    @staticmethod
+    def _validate_density_matrix(rho: _np.ndarray):
+        if rho is None:
+            raise ValueError("rho is None")
+        if not isinstance(rho, _np.ndarray):
+            raise TypeError("rho must be a numpy array")
+        if rho.ndim != 2 or rho.shape[0] != rho.shape[1]:
+            raise ValueError("rho must be a square 2D density matrix")
+        dim = rho.shape[0]
+        # check power-of-two
+        if (dim & (dim - 1)) != 0:
+            raise ValueError("rho dimension must be a power of two (2^n x 2^n)")
+
+    @staticmethod
+    def _num_qubits_from_rho(rho: _np.ndarray) -> int:
+        dim = rho.shape[0]
+        # avoid floating log inaccuracies
+        n = int(round(_np.log2(dim)))
+        return n
+
+    @staticmethod
+    def _full_kron_for_target(single_op: _np.ndarray, target: int, n_qubits: int) -> _np.ndarray:
+        """
+        Build full-system operator for single-qubit operator `single_op` acting on `target` qubit.
+        Tensor ordering: (... ⊗ q2 ⊗ q1 ⊗ q0), so target=0 -> right-most factor.
+        """
+
+        ops = []
+        for q in range(n_qubits - 1, -1, -1):  # build left-to-right for np.kron chaining
+            if q == target:
+                ops.append(single_op)
+            else:
+                ops.append(_np.eye(2, dtype=_np.complex128))
+        # chain with np.kron: reduce from left to right
+        full = ops[0]
+        for op in ops[1:]:
+            full = _np.kron(full, op)
+        return full
+
+    def _apply_local_kraus_channel_to_rho(self, rho: _np.ndarray, kraus_list, target: int) -> _np.ndarray:
+        """
+        Apply a single-qubit Kraus list to `target` qubit in full density `rho`.
+        Returns updated rho' = sum_i (K_i_full) rho (K_i_full)^\dagger
+        """
+
+        n_qubits = self._num_qubits_from_rho(rho)
+        rho_p = _np.zeros_like(rho, dtype=_np.complex128)
+        for K in kraus_list:
+            K_full = self._full_kron_for_target(K, target, n_qubits)
+            rho_p = rho_p + K_full @ rho @ K_full.conj().T
+        return _np.asarray(rho_p, dtype=_np.complex128)
+
+    def apply_amplitude_damping_to_density_multi(self, rho: _np.ndarray, gamma: Optional[float] = None, targets=None) -> _np.ndarray:
+        """
+        Apply amplitude damping independently to each qubit in `targets`.
+        - rho: full-system density matrix (2^n x 2^n)
+        - gamma: damping probability (defaults to self.p_amp)
+        - targets: iterable of qubit indices (little-endian). If None, apply to all qubits.
+        """
+        self._validate_density_matrix(rho)
+        gamma = float(gamma) if gamma is not None else float(self.p_amp)
+        n = self._num_qubits_from_rho(rho)
+        if targets is None:
+            targets = list(range(n))
+        else:
+            targets = list(targets)
+
+        ks = self._kraus_amplitude_damping(gamma)
+        rho_p = rho.copy()
+        for t in targets:
+            if t < 0 or t >= n:
+                raise IndexError(f"target qubit {t} out of range for {n} qubits")
+            rho_p = self._apply_local_kraus_channel_to_rho(rho_p, ks, int(t))
+        return _np.asarray(rho_p, dtype=_np.complex128)
+
+    def apply_phase_damping_to_density_multi(self, rho: _np.ndarray, p: Optional[float] = None, targets=None) -> _np.ndarray:
+        """
+        Apply phase damping independently to each qubit in `targets`.
+        - p: dephasing probability (defaults to self.p_phase)
+        """
+        self._validate_density_matrix(rho)
+        p = float(p) if p is not None else float(self.p_phase)
+        n = self._num_qubits_from_rho(rho)
+        if targets is None:
+            targets = list(range(n))
+        else:
+            targets = list(targets)
+
+        ks = self._kraus_phase_damping(p)
+        rho_p = rho.copy()
+        for t in targets:
+            if t < 0 or t >= n:
+                raise IndexError(f"target qubit {t} out of range for {n} qubits")
+            rho_p = self._apply_local_kraus_channel_to_rho(rho_p, ks, int(t))
+        return _np.asarray(rho_p, dtype=_np.complex128)
+
+    def apply_depolarizing_to_density_multi(self, rho: _np.ndarray, p: Optional[float] = None, targets=None) -> _np.ndarray:
+        """
+        Apply single-qubit depolarizing channel independently to each qubit in `targets`.
+        - p: depolarizing probability (defaults to self.p_1qubit)
+        """
+        self._validate_density_matrix(rho)
+        p = float(p) if p is not None else float(self.p_1qubit)
+        n = self._num_qubits_from_rho(rho)
+        if targets is None:
+            targets = list(range(n))
+        else:
+            targets = list(targets)
+
+        ks = self._kraus_depolarizing(p)
+        rho_p = rho.copy()
+        for t in targets:
+            if t < 0 or t >= n:
+                raise IndexError(f"target qubit {t} out of range for {n} qubits")
+            rho_p = self._apply_local_kraus_channel_to_rho(rho_p, ks, int(t))
+        return _np.asarray(rho_p, dtype=_np.complex128)
+
+    def apply_noise_to_density_multi(self, rho: _np.ndarray, targets=None, **kwargs) -> _np.ndarray:
+        """
+        Convenience dispatcher: apply `self.error_kind` channel to `rho`.
+        kwargs passed to underlying method (e.g., gamma/p/p).
+        """
+        kind = self.error_kind
+        if kind == "amplitude_damping":
+            return self.apply_amplitude_damping_to_density_multi(rho, gamma=kwargs.get("gamma", None), targets=targets)
+        if kind == "phase_damping":
+            return self.apply_phase_damping_to_density_multi(rho, p=kwargs.get("p", None), targets=targets)
+        return self.apply_depolarizing_to_density_multi(rho, p=kwargs.get("p", None), targets=targets)
+
     def simulate_circuit(self, qc: QuantumCircuit, shots: int = 1) -> _np.ndarray:
         """
         Short, modern simulate_circuit for Aer builds that store final state under
@@ -141,9 +313,6 @@ class NoiseExtractor:
         if _IMPORT_ERROR is not None:
             raise RuntimeError("qiskit / qiskit-aer not available")
 
-        import numpy as _np  # keep local alias consistent with module
-
-        # defensive copy
         qc_run = qc.copy() if hasattr(qc, "copy") else qc
 
         method = ""
@@ -175,7 +344,6 @@ class NoiseExtractor:
                 except Exception:
                     pass
 
-        # helper to convert qiskit objects -> numpy arrays
         def _to_ndarray(obj):
             if obj is None:
                 return None
@@ -197,12 +365,10 @@ class NoiseExtractor:
             except Exception:
                 return None
 
-        # run and extract
         try:
             job = self.simulator.run(qc_run, shots=shots)
             result = job.result()
         except Exception as e:
-            # give a clear hint if we tried an incompatible save
             err = str(e).lower()
             if "contains invalid instructions" in err or "invalid instruction" in err:
                 raise RuntimeError(
@@ -213,14 +379,12 @@ class NoiseExtractor:
                 ) from e
             raise RuntimeError(f"AerSimulator failed to run circuit: {e}") from e
 
-        # result.data() should contain the object (Statevector or DensityMatrix)
         data = {}
         try:
             data = result.data() or {}
         except Exception:
             data = {}
 
-        # prefer density_matrix, else statevector (both under result.data() or results[0].data)
         val = None
         if "density_matrix" in data:
             val = data["density_matrix"]
@@ -237,7 +401,6 @@ class NoiseExtractor:
             rho = _np.outer(sv_arr, _np.conjugate(sv_arr))
             return _np.asarray(rho, dtype=_np.complex128)
 
-        # try results[0].data() as fallback
         try:
             rs = getattr(result, "results", None)
             if rs and len(rs) > 0:
@@ -254,7 +417,6 @@ class NoiseExtractor:
         except Exception:
             pass
 
-        # try getters as last resort
         try:
             if hasattr(result, "get_density_matrix"):
                 dm = result.get_density_matrix()
@@ -272,7 +434,6 @@ class NoiseExtractor:
         except Exception:
             pass
 
-        # nothing found -> helpful error
         raise RuntimeError(
             "Simulator result did not contain 'density_matrix' or 'statevector' in result.data(). "
             "Make sure you add a compatible save instruction before running the circuit. "
