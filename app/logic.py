@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 import dash
-from dash import ctx, clientside_callback
+from dash import ctx, clientside_callback, html
 from dash.dependencies import Input, Output, State, ClientsideFunction
 
 from data.datasets_torch import create_dataset, create_target, classification_datasets, regression_datasets
@@ -20,7 +20,7 @@ from utils.serialization import serialize_quantum_states, unserialize_quantum_st
 from utils.trace_updates import create_extendData_dicts
 from utils.noise_simulator_mock import generate_mock_trajectories
 
-from layout import layout_overall
+from layout import layout_overall, build_noise_metrics_table
 from plotting import *
 
 qml_app = dash.Dash(__name__, url_base_pathname='/qml-playground/', title="QML Playground")
@@ -30,6 +30,50 @@ qml_app.layout = layout_overall
 logger = logging.getLogger(" [DASH Callback]")
 
 reset_triggers = ["reset_button", "select_num_qubits", "select_num_layers", "select_data_set", "select_task_type"]
+
+
+def _compute_noise_metrics(trajectory_data, frame_idx=None):
+    """Return fidelity, purity, and accuracy stats for the current noise frame."""
+    if trajectory_data is None:
+        return {}
+
+    ideal_vectors = np.array(trajectory_data.get("ideal", []), dtype=float)
+    noisy_vectors = np.array(trajectory_data.get("noisy", []), dtype=float)
+
+    if ideal_vectors.size == 0 or noisy_vectors.size == 0:
+        return {}
+
+    max_idx = min(len(ideal_vectors), len(noisy_vectors)) - 1
+    if max_idx < 0:
+        return {}
+
+    if frame_idx is None:
+        frame_idx = max_idx
+
+    frame_idx = int(np.clip(frame_idx, 0, max_idx))
+
+    ideal_slice = ideal_vectors[:frame_idx + 1]
+    noisy_slice = noisy_vectors[:frame_idx + 1]
+
+    final_ideal = ideal_slice[-1]
+    final_noisy = noisy_slice[-1]
+
+    fidelity = 0.5 * (1.0 + np.clip(np.dot(final_ideal, final_noisy), -1.0, 1.0))
+    purity = 0.5 * (1.0 + float(np.dot(final_noisy, final_noisy)))
+
+    ideal_labels = (ideal_slice[:, 2] >= 0).astype(int)
+    noisy_labels = (noisy_slice[:, 2] >= 0).astype(int)
+    classification_accuracy = float(np.mean(ideal_labels == noisy_labels))
+
+    fidelity = float(np.clip(fidelity, 0.0, 1.0))
+    purity = float(np.clip(purity, 0.0, 1.0))
+    classification_accuracy = float(np.clip(classification_accuracy, 0.0, 1.0))
+
+    return {
+        "fidelity": fidelity,
+        "purity": purity,
+        "classification_accuracy": classification_accuracy,
+    }
 
 @qml_app.callback(
     [
@@ -350,6 +394,33 @@ def animate_noise_simulator(interval_count: int,
     }
 
     return comparison_fig, new_animation_state
+
+
+@qml_app.callback(
+    Output(component_id="noise_metrics_container", component_property="children"),
+    inputs=[
+        Input(component_id="noise_animation_state", component_property="data"),
+        Input(component_id="noise_trajectory_store", component_property="data"),
+    ],
+    prevent_initial_call=False,
+)
+def update_noise_metrics_table(animation_state, trajectory_data):
+    """Update the metrics table to reflect the currently displayed Bloch frame."""
+    if trajectory_data is None:
+        return [
+            html.H3("Performance Metrics", style={"marginTop": "0px"}),
+            build_noise_metrics_table(),
+        ]
+
+    frame_idx = None
+    if animation_state and animation_state.get("version") == trajectory_data.get("version"):
+        frame_idx = animation_state.get("frame")
+
+    metrics = _compute_noise_metrics(trajectory_data, frame_idx)
+    return [
+        html.H3("Performance Metrics", style={"marginTop": "0px"}),
+        build_noise_metrics_table(metrics),
+    ]
 
 
 @qml_app.callback(
