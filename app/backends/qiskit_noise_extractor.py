@@ -20,6 +20,22 @@ except Exception as e_a:
 else:
     _IMPORT_ERROR = None
 
+from qiskit_aer.noise import amplitude_damping_error, phase_damping_error, depolarizing_error
+import os
+
+def _gate_error_to_depol_p(g_err, n_qubits):
+        if g_err is None:
+            return 0.0
+        if n_qubits == 1:
+            p = 2.0 * float(g_err)
+        elif n_qubits == 2:
+            p = (4.0 / 3.0) * float(g_err)
+        else:
+            d = 2 ** n_qubits
+            denom = 1.0 - 1.0 / d
+            p = float(g_err) / denom if denom > 0 else float(g_err)
+        return max(0.0, min(1.0, p))
+
 __all__ = ["NoiseExtractor"]
 
 class NoiseExtractor:
@@ -288,6 +304,215 @@ class NoiseExtractor:
         if kind == "phase_damping":
             return self.apply_phase_damping_to_density_multi(rho, p=kwargs.get("p", None), targets=targets)
         return self.apply_depolarizing_to_density_multi(rho, p=kwargs.get("p", None), targets=targets)
+    
+    def get_backend(self, backend_name: str):
+        """Return an IBM backend using QiskitRuntimeService (preferred) or fallback to IBMQ."""
+        try:
+            from qiskit_ibm_runtime import QiskitRuntimeService
+            service = QiskitRuntimeService(channel="ibm_quantum_platform",
+            token= os.getenv("QISKIT_IBM_RUNTIME_API_TOKEN"),
+            instance=os.getenv("CRN"))
+            return service.backend(backend_name)
+        except Exception as e:
+            raise RuntimeError(f"Unable to load backend '{backend_name}'. Ensure IBM credentials are set.") from e
+
+    def get_backend_calibration_simple(self, backend, qubits: Optional[list] = None,
+                                       gate_name: str = "cx", refresh: bool = False, verbose: bool = False):
+        """
+        Simple extractor for T1/T2 and gate errors using Backend.properties(refresh=...).
+        Assumes per-qubit accessors props.t1(q) / props.t2(q) and props.gate_error(...) exist.
+        Returns: {"t1": [...], "t2": [...], "gate_errors": {(q,): val, (q0,q1): val, ('global',): val}}
+        """
+        props = backend.properties(refresh=refresh)
+
+        n_qubits = getattr(backend, "num_qubits", None)
+        if n_qubits is None:
+            # minimal fallback: try to infer from properties dict (rare)
+            pd = props.to_dict()
+            n_qubits = len(pd.get("qubits", []))
+        qubits = list(qubits) if qubits is not None else list(range(n_qubits))
+
+        t1_list = []
+        t2_list = []
+        for q in qubits:
+            try:
+                v = props.t1(q)
+                t1_list.append(float(v) if v is not None else None)
+            except Exception:
+                t1_list.append(None)
+            try:
+                v = props.t2(q)
+                t2_list.append(float(v) if v is not None else None)
+            except Exception:
+                t2_list.append(None)
+
+        gate_errors = {}
+        ge_acc = getattr(props, "gate_error", None)
+        if callable(ge_acc):
+            try:
+                ge = ge_acc(gate_name)
+                if isinstance(ge, dict):
+                    for k, v in ge.items():
+                        if isinstance(k, str):
+                            try:
+                                k_parsed = tuple(int(x.strip()) for x in k.strip("()[]").split(",") if x.strip() != "")
+                            except Exception:
+                                k_parsed = (k,)
+                        elif isinstance(k, (list, tuple)):
+                            k_parsed = tuple(int(x) for x in k)
+                        else:
+                            k_parsed = (k,)
+                        gate_errors[k_parsed] = float(v) if v is not None else None
+                elif isinstance(ge, (int, float)):
+                    gate_errors[("global",)] = float(ge)
+            except TypeError:
+                for i in qubits:
+                    for j in qubits:
+                        if i >= j:
+                            continue
+                        try:
+                            v = ge_acc(gate_name, qubits=[i, j])
+                            if v is not None:
+                                gate_errors[(i, j)] = float(v)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
+
+        if verbose:
+            print("Backend calibration (simple):")
+            print(f"  qubits: {qubits}")
+            print(f"  T1: {t1_list[:min(8, len(t1_list))]}")
+            print(f"  T2: {t2_list[:min(8, len(t2_list))]}")
+            print(f"  gate_errors (sample): {dict(list(gate_errors.items())[:8])}")
+
+        return {"t1": t1_list, "t2": t2_list, "gate_errors": gate_errors}
+    
+    def build_noise_model_from_cal_simple(self, cal: dict, default_p1: float = 0.001, default_p2: float = 0.01,
+                                      one_q_gates=None, two_q_gate="cx"):
+        if one_q_gates is None:
+            one_q_gates = ["x", "u1", "u2", "u3", "h", "rx", "ry", "rz"]
+
+        nm = NoiseModel()
+        ge = cal.get("gate_errors", {}) or {}
+
+        per_q = {k[0]: v for k, v in ge.items() if isinstance(k, tuple) and len(k) == 1 and isinstance(k[0], int)}
+        global_1q = ge.get(("global",), ge.get(("global_1q",), None))
+
+        if per_q:
+            for q, err in per_q.items():
+                p1 = _gate_error_to_depol_p(err, 1) if err is not None else default_p1
+                for g in one_q_gates:
+                    try:
+                        nm.add_quantum_error(depolarizing_error(p1, 1), g, qubits=[q])
+                    except Exception:
+                        pass
+        else:
+            p1 = _gate_error_to_depol_p(global_1q, 1) if global_1q is not None else default_p1
+            for g in one_q_gates:
+                try:
+                    nm.add_all_qubit_quantum_error(depolarizing_error(p1, 1), g)
+                except Exception:
+                    pass
+
+        attached_2q = False
+        for k, err in ge.items():
+            if isinstance(k, tuple) and len(k) == 2 and all(isinstance(x, int) for x in k):
+                p2 = _gate_error_to_depol_p(err, 2) if err is not None else default_p2
+                try:
+                    nm.add_quantum_error(depolarizing_error(p2, 2), two_q_gate, qubits=list(k))
+                    attached_2q = True
+                except Exception:
+                    pass
+
+        if not attached_2q:
+            try:
+                nm.add_all_qubit_quantum_error(depolarizing_error(default_p2, 2), two_q_gate)
+            except Exception:
+                pass
+
+        return nm
+    # Build T1/T2 -> amplitude+phase damping NoiseModel (simple)
+    def build_noise_model_from_t1t2(self, cal: dict,
+                                    one_q_gate_time_s: float,
+                                    two_q_gate_time_s: float = 200e-9,
+                                    default_2q_err: float = 0.02,
+                                    one_q_gates=None,
+                                    two_q_gate="cx"):
+        if one_q_gates is None:
+            one_q_gates = ["x", "u1", "u2", "u3", "h", "rx", "ry", "rz"]
+
+        nm = NoiseModel()
+        ge = cal.get("gate_errors", {}) or {}
+        t1_list = cal.get("t1") or []
+        t2_list = cal.get("t2") or []
+        n_qubits = max(len(t1_list), len(t2_list)) if (t1_list or t2_list) else 0
+
+        def _safe(x):
+            try:
+                return float(x)
+            except Exception:
+                return None
+
+        for q in range(n_qubits):
+            T1 = _safe(t1_list[q]) if q < len(t1_list) else None
+            T2 = _safe(t2_list[q]) if q < len(t2_list) else None
+
+            p_amp = None
+            if T1 and T1 > 0:
+                p_amp = 1.0 - _np.exp(-one_q_gate_time_s / T1)
+                p_amp = max(0.0, min(1.0, p_amp))
+
+            p_phase = None
+            if T2 and T2 > 0:
+                if T1 and T1 > 0:
+                    denom = (1.0 / T2) - (1.0 / (2.0 * T1))
+                    if denom > 0:
+                        Tphi = 1.0 / denom
+                        p_phase = 1.0 - _np.exp(-one_q_gate_time_s / Tphi)
+                        p_phase = max(0.0, min(1.0, p_phase))
+                if p_phase is None:
+                    p_phase = 1.0 - _np.exp(-one_q_gate_time_s / T2)
+                    p_phase = max(0.0, min(1.0, p_phase))
+
+            if p_amp is not None and amplitude_damping_error is not None:
+                err_amp = amplitude_damping_error(p_amp)
+                for g in one_q_gates:
+                    try:
+                        nm.add_quantum_error(err_amp, g, qubits=[q])
+                    except Exception:
+                        pass
+
+            if p_phase is not None and phase_damping_error is not None:
+                err_phase = phase_damping_error(p_phase)
+                for g in one_q_gates:
+                    try:
+                        nm.add_quantum_error(err_phase, g, qubits=[q])
+                    except Exception:
+                        pass
+
+        attached = False
+        for k, v in ge.items():
+            if isinstance(k, tuple) and len(k) == 2 and all(isinstance(x, int) for x in k):
+                try:
+                    p2_param = float(v) if v is not None else default_2q_err
+                except Exception:
+                    p2_param = default_2q_err
+                p2_depol = max(0.0, min(1.0, (4.0 / 3.0) * p2_param))
+                try:
+                    nm.add_quantum_error(depolarizing_error(p2_depol, 2), two_q_gate, qubits=list(k))
+                    attached = True
+                except Exception:
+                    pass
+
+        if not attached:
+            try:
+                nm.add_all_qubit_quantum_error(depolarizing_error(default_2q_err, 2), two_q_gate)
+            except Exception:
+                pass
+
+        return nm
+
 
     def simulate_circuit(self, qc: QuantumCircuit, shots: int = 1) -> _np.ndarray:
         """
