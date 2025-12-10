@@ -2,9 +2,9 @@
 import numpy as np
 import pytest
 import importlib
-from app.backends.circuit_bridge import CircuitBridge
-from app.backends.qiskit_noise_extractor import NoiseExtractor
-from app.backends.noisy_ml_simulator import NoisyMLSimulator
+from backends.circuit_bridge import CircuitBridge
+from backends.qiskit_noise_extractor import NoiseExtractor
+from backends.noisy_ml_simulator import NoisyMLSimulator
 import torch
 
 # Small helper used by multiple tests
@@ -63,20 +63,12 @@ def test_noise_extractor_creates_noise_model():
 def test_noisy_simulator_runs_comparison():
     """Verify NoisyMLSimulator.get_comparison() returns valid results."""
     # Try to construct with track_noise=True to exercise noisy path if Aer is present.
-    # If Aer isn't installed, NoisyMLSimulator may raise; in that case skip (we still test ideal path below).
-    try:
-        sim = NoisyMLSimulator(n_qubits=1, n_layers=1, p_1qubit=0.01, p_2qubit=0.02, track_noise=True, gpu=False, seed=42)
-        aer_available_for_test = True
-    except RuntimeError:
-        # Aer not available in this interpreter or NoiseExtractor failed; fallback to ideal-only test
-        sim = NoisyMLSimulator(n_qubits=1, n_layers=1, p_1qubit=0.0, p_2qubit=0.0, track_noise=False, gpu=False, seed=42)
-        aer_available_for_test = False
-
-    # Run a short forward pass and apply gates
+    sim = NoisyMLSimulator(n_qubits=1, n_layers=1, p_1qubit=0.01, p_2qubit=0.02, track_noise=True, gpu=False, seed=42)
+    aer_available_for_test = True
+   
     X = torch.rand(1, 3)
     sim.forward(X)
     angles = sim.get_angles(X)  # shape (1, n_layers, n_qubits, 3)
-    # Apply rotation (layer 0), then H
     sim.Rot(angles[:, 0, :, :])
     sim.H([0], 1)
 
@@ -87,18 +79,40 @@ def test_noisy_simulator_runs_comparison():
     ideal = comp["ideal"]
     noisy = comp["noisy"]
 
-    # Ideal should always be present and valid
     assert "density_matrix" in ideal and isinstance(ideal["density_matrix"], np.ndarray)
     assert is_density_matrix(ideal["density_matrix"])
 
-    # Noisy should be a density matrix (may equal ideal if noise disabled)
     assert "density_matrix" in noisy and isinstance(noisy["density_matrix"], np.ndarray)
     assert is_density_matrix(noisy["density_matrix"])
 
-    # fidelity and purity numeric checks
     assert 0.0 <= noisy["fidelity"] <= 1.0
     assert 0.0 <= ideal.get("purity", 0.0) <= 1.0
     assert 0.0 <= noisy.get("purity", 0.0) <= 1.0
 
     if aer_available_for_test:
         assert noisy["fidelity"] <= 1.0
+
+
+try:
+    from noisy_ml_simulator import NoisyMLSimulator
+    import torch
+
+    print("NoisyMLSimulator found — running a minimal example...")
+    sim = NoisyMLSimulator(n_qubits=1, n_layers=1, p_1qubit=0.05, p_2qubit=0.0, track_noise=True, gpu=False, seed=42)
+    X = torch.rand(1, 3)  # dummy feature vector
+    _ = sim.forward(X)    # initializes |0>
+    _ = sim.H([0], n_samples=1)
+
+    out = sim.get_comparison()
+    print("Keys:", list(out.keys()))
+    print("Ideal Purity:", out["ideal"]["purity"], "Noisy Purity:", out["noisy"]["purity"])
+    print("Noisy Fidelity:", out["noisy"]["fidelity"])
+    print("Bloch (ideal traj first):", out["ideal"]["bloch_trajectory"][0])
+    print("Bloch (noisy, q0):", out["noisy"]["bloch"])
+
+except Exception as e:
+    print("NoisyMLSimulator not available or failed to run.\n"
+          "To enable this cell, ensure your project folder is on PYTHONPATH and "+
+          "that 'noisy_ml_simulator.py' and its dependencies are importable.\n\n"
+          f"Details: {e}")
+

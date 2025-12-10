@@ -1,15 +1,3 @@
-# noisy_ml_simulator.py
-"""
-NoisyMLSimulator: a wrapper around StateVecSimTorch that records gates via CircuitBridge
-and can run a noisy simulation using Qiskit Aer via NoiseExtractor.
-
-Design goals:
-- Defensive imports: importing this module should fail with a clear message if core
-  dependencies are missing (StateVecSimTorch, CircuitBridge).
-- Qiskit / NoiseExtractor is optional. If Aer isn't available, noisy path is disabled
-  but the class still works for ideal simulations.
-- Clear runtime errors for misuse (e.g., calling get_comparison before running forward).
-"""
 from __future__ import annotations
 
 from copy import deepcopy
@@ -201,7 +189,6 @@ class NoisyMLSimulator(StateVecSimTorch):
         else:
             rho_noisy = deepcopy(rho_ideal)
 
-        # compute fidelity (ideal pure psi vs rho_noisy)
         psi = ideal_state_torch.detach().cpu().numpy()[0]
         fid = float(np.real(np.vdot(psi, rho_noisy.dot(psi))))
 
