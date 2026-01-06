@@ -113,7 +113,217 @@ class NoisyMLSimulator(StateVecSimTorch):
             self.ideal_bloch_trajectory.append(self._state_to_bloch(final_state))
         return final_state
 
-    # ( add similar wrappers for X,Y,Z, RX, RY, RZ, CZ, SWAP )
+    def _snapshot_and_record(self, final_state, gate_name: str, qubits: Sequence[int], params: Dict[str, Any] = None):
+        """Record gate into circuit bridge and snapshot ideal state & bloch (if 1 qubit)."""
+        if params is None:
+            params = {}
+        self.circuit_bridge.record_gate(gate_name, list(qubits), params=params)
+        # store snapshot (detached CPU)
+        self.ideal_states.append(final_state.clone().detach().cpu())
+        if self.n_qubits == 1:
+            try:
+                self.ideal_bloch_trajectory.append(self._state_to_bloch(final_state))
+            except Exception:
+                # be robust if conversion fails
+                pass
+
+    def _extract_qubits_from_args(self, args, kwargs) -> List[int]:
+        """
+        Best-effort extraction of qubit indices from args/kwargs.
+        Handles the common call patterns:
+         - first positional arg is int (single qubit)
+         - first positional arg is list/tuple of ints
+         - qubit_map strings like "next", "ring"
+         - 'qubits' keyword
+        Returns list of ints (may be empty if can't infer).
+        """
+        # priority: kwargs['qubits']
+        qs = kwargs.get("qubits", None)
+        if qs is not None:
+            return list(qs) if isinstance(qs, (list, tuple)) else [int(qs)]
+        if len(args) >= 1:
+            first = args[0]
+            # qubit map strings used in your CNOT implementation
+            if isinstance(first, str) and first in ("next", "ring"):
+                if first == "next":
+                    return [(i, i + 1) for i in range(self.n_qubits - 1)]
+                else:  # ring
+                    qs_pairs = [(i, i + 1) for i in range(self.n_qubits - 1)]
+                    if self.n_qubits > 2:
+                        qs_pairs.append((self.n_qubits - 1, 0))
+                    return qs_pairs
+            if isinstance(first, (list, tuple)):
+                return list(first)
+            try:
+                # single int-like
+                return [int(first)]
+            except Exception:
+                pass
+        # fallback: empty
+        return []
+
+    # Generic single-qubit Pauli wrappers (accept variable signatures, forward to parent)
+    def X(self, *args, **kwargs):
+        final_state = super().X(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        self._snapshot_and_record(final_state, "X", qs)
+        return final_state
+
+    def Y(self, *args, **kwargs):
+        final_state = super().Y(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        self._snapshot_and_record(final_state, "Y", qs)
+        return final_state
+
+    def Z(self, *args, **kwargs):
+        final_state = super().Z(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        self._snapshot_and_record(final_state, "Z", qs)
+        return final_state
+
+    # Parameterized single-qubit rotations (RX/RY/RZ). We try to find 'theta' in args/kwargs.
+    def RX(self, *args, **kwargs):
+        final_state = super().RX(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        theta = kwargs.get("theta", None)
+        # often theta could be second positional arg
+        if theta is None and len(args) >= 2:
+            theta = args[1]
+        params = {"theta": float(theta)} if theta is not None else {}
+        self._snapshot_and_record(final_state, "RX", qs, params=params)
+        return final_state
+
+    def RY(self, *args, **kwargs):
+        final_state = super().RY(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        theta = kwargs.get("theta", None)
+        if theta is None and len(args) >= 2:
+            theta = args[1]
+        params = {"theta": float(theta)} if theta is not None else {}
+        self._snapshot_and_record(final_state, "RY", qs, params=params)
+        return final_state
+
+    def RZ(self, *args, **kwargs):
+        final_state = super().RZ(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        theta = kwargs.get("theta", None)
+        if theta is None and len(args) >= 2:
+            theta = args[1]
+        params = {"theta": float(theta)} if theta is not None else {}
+        self._snapshot_and_record(final_state, "RZ", qs, params=params)
+        return final_state
+
+    # Controlled-Z (sometimes parent may expose CZ)
+    def CZ(self, *args, **kwargs):
+        final_state = super().CZ(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        self._snapshot_and_record(final_state, "CZ", qs)
+        return final_state
+
+    # Swap
+    def SWAP(self, *args, **kwargs):
+        final_state = super().SWAP(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        self._snapshot_and_record(final_state, "SWAP", qs)
+        return final_state
+
+    # S / SDG / T / TDG / SX / SXDG (phase / small-rotation gates)
+    def S(self, *args, **kwargs):
+        final_state = super().S(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        self._snapshot_and_record(final_state, "S", qs)
+        return final_state
+
+    def SDG(self, *args, **kwargs):
+        final_state = super().SDG(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        self._snapshot_and_record(final_state, "SDG", qs)
+        return final_state
+
+    def T(self, *args, **kwargs):
+        final_state = super().T(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        self._snapshot_and_record(final_state, "T", qs)
+        return final_state
+
+    def TDG(self, *args, **kwargs):
+        final_state = super().TDG(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        self._snapshot_and_record(final_state, "TDG", qs)
+        return final_state
+
+    def SX(self, *args, **kwargs):
+        final_state = super().SX(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        self._snapshot_and_record(final_state, "SX", qs)
+        return final_state
+
+    def SXDG(self, *args, **kwargs):
+        final_state = super().SXDG(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        self._snapshot_and_record(final_state, "SXDG", qs)
+        return final_state
+
+    # Generic U / U3 wrapper: try to capture (theta, phi, lam) if provided
+    def U(self, *args, **kwargs):
+        final_state = super().U(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        # attempt to find angles in kwargs or positional args
+        params = {}
+        if "params" in kwargs:
+            params = kwargs["params"]
+        else:
+            # common signature: (qubit, theta, phi, lam, ...)
+            if len(args) >= 4:
+                try:
+                    params = {"theta": float(args[1]), "phi": float(args[2]), "lam": float(args[3])}
+                except Exception:
+                    params = {}
+            else:
+                # check kwargs for theta/phi/lam
+                for key in ("theta", "phi", "lam", "lambda"):
+                    if key in kwargs:
+                        params[key] = float(kwargs[key])
+        self._snapshot_and_record(final_state, "U", qs, params=params)
+        return final_state
+
+    # Controlled parameterized rotations (CRX/CRY/CRZ)
+    def CRX(self, *args, **kwargs):
+        final_state = super().CRX(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        theta = kwargs.get("theta", None)
+        if theta is None and len(args) >= 2:
+            theta = args[1]
+        params = {"theta": float(theta)} if theta is not None else {}
+        self._snapshot_and_record(final_state, "CRX", qs, params=params)
+        return final_state
+
+    def CRY(self, *args, **kwargs):
+        final_state = super().CRY(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        theta = kwargs.get("theta", None)
+        if theta is None and len(args) >= 2:
+            theta = args[1]
+        params = {"theta": float(theta)} if theta is not None else {}
+        self._snapshot_and_record(final_state, "CRY", qs, params=params)
+        return final_state
+
+    def CRZ(self, *args, **kwargs):
+        final_state = super().CRZ(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        theta = kwargs.get("theta", None)
+        if theta is None and len(args) >= 2:
+            theta = args[1]
+        params = {"theta": float(theta)} if theta is not None else {}
+        self._snapshot_and_record(final_state, "CRZ", qs, params=params)
+        return final_state
+
+    # Toffoli (CCX)
+    def CCX(self, *args, **kwargs):
+        final_state = super().CCX(*args, **kwargs)
+        qs = self._extract_qubits_from_args(args, kwargs)
+        self._snapshot_and_record(final_state, "CCX", qs)
+        return final_state
 
 
     def _statevector_to_density(self, state_vec_torch):

@@ -7,6 +7,7 @@ import torch.nn as nn
 
 logger = logging.getLogger(" [Backends]")
 
+__all__ = ["StateVecSimTorch"]
 
 class StateVecSimTorch(nn.Module):
     def __init__(self, n_qubits,
