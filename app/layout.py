@@ -364,6 +364,21 @@ noise_simulator_panel = html.Div([
                 ),
             ], style={"marginBottom": "18px"}),
             html.Div([
+                html.Label("IBM Backend (optional)", style={"fontWeight": "600", "marginBottom": "6px"}),
+                dcc.Dropdown(
+                    id="select_noise_backend",
+                    options=[
+                        {"label": "Auto (Aer)", "value": ""},
+                        {"label": "ibmq_qasm_simulator", "value": "ibmq_qasm_simulator"},
+                        {"label": "ibm_oslo", "value": "ibm_oslo"},
+                        {"label": "ibm_brisbane", "value": "ibm_brisbane"},
+                    ],
+                    placeholder="Select backend or leave empty",
+                    clearable=True,
+                    style={"width": "100%"},
+                ),
+            ], style={"marginBottom": "18px"}),
+            html.Div([
                 html.Label("Depolarizing Probability", style={"fontWeight": "600"}),
                 html.Span("(dep only)", style={"color": "#6c757d", "fontSize": "12px", "marginLeft": "6px"}),
                 dcc.Slider(
@@ -411,6 +426,24 @@ noise_simulator_panel = html.Div([
     ], className="rowContainer",
         style={"justify-content": "space-between", "align-items": "stretch", "gap": "24px"}
     ),
+    html.Div(
+        id="gate_importance_panel",
+        className="gate-chip-panel",
+        children=[
+            html.Div("Gate Sensitivity (by noise)", style={"fontWeight": "600", "marginBottom": "6px"}),
+            html.Div(
+                ["Loading gate scores..."],
+                className="gate-chip-row",
+            ),
+        ],
+        style={
+            "marginTop": "12px",
+            "backgroundColor": "rgba(255, 255, 255, 0.9)",
+            "borderRadius": "10px",
+            "padding": "12px 14px",
+            "boxShadow": "0 10px 24px rgba(0,0,0,0.05)",
+        },
+    ),
     dcc.Interval(
         id="noise_animation_interval",
         interval=200,
@@ -424,7 +457,9 @@ layout_rows = [
     dcc.Store(id="train_datastore"),
     dcc.Store(id="test_datastore"),
     dcc.Store(id="model_parameters"),
+    dcc.Textarea(id="gate_score_qasm_input", style={"display": "none"}),
     dcc.Store(id="noise_trajectory_store"),
+    dcc.Store(id="noise_qasm_store"),
     dcc.Store(id="noise_animation_state", data={"frame": 0, "version": None}),
     dcc.Store(id="metrics"),
     dcc.Store(id="quantum_state_store"),
