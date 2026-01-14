@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 import dash
-from dash import ctx, clientside_callback, html
+from dash import ctx, clientside_callback
 from dash.dependencies import Input, Output, State, ClientsideFunction
 
 from data.datasets_torch import create_dataset, create_target, classification_datasets, regression_datasets
@@ -18,13 +18,9 @@ from models.reuploading_regressor import QuantumReuploadingRegressor
 
 from utils.serialization import serialize_quantum_states, unserialize_quantum_states, unserialize_model_dict
 from utils.trace_updates import create_extendData_dicts
+from utils.noise_simulator_mock import generate_mock_trajectories
 
-from backends.qiskit_noise_extractor import NoiseExtractor
-try:
-    from qiskit import QuantumCircuit as _QC
-except Exception:
-    _QC = None
-from layout import layout_overall, build_noise_metrics_table
+from layout import layout_overall
 from plotting import *
 
 qml_app = dash.Dash(__name__, url_base_pathname='/qml-playground/', title="QML Playground")
@@ -34,166 +30,6 @@ qml_app.layout = layout_overall
 logger = logging.getLogger(" [DASH Callback]")
 
 reset_triggers = ["reset_button", "select_num_qubits", "select_num_layers", "select_data_set", "select_task_type"]
-
-
-def _compute_noise_metrics(trajectory_data, frame_idx=None):
-    """Return fidelity, purity, and accuracy stats for the current noise frame."""
-    if trajectory_data is None:
-        return {}
-
-    ideal_vectors = np.array(trajectory_data.get("ideal", []), dtype=float)
-    noisy_vectors = np.array(trajectory_data.get("noisy", []), dtype=float)
-
-    if ideal_vectors.size == 0 or noisy_vectors.size == 0:
-        return {}
-
-    max_idx = min(len(ideal_vectors), len(noisy_vectors)) - 1
-    if max_idx < 0:
-        return {}
-
-    if frame_idx is None:
-        frame_idx = max_idx
-
-    frame_idx = int(np.clip(frame_idx, 0, max_idx))
-
-    ideal_slice = ideal_vectors[:frame_idx + 1]
-    noisy_slice = noisy_vectors[:frame_idx + 1]
-
-    final_ideal = ideal_slice[-1]
-    final_noisy = noisy_slice[-1]
-
-    fidelity = 0.5 * (1.0 + np.clip(np.dot(final_ideal, final_noisy), -1.0, 1.0))
-    purity = 0.5 * (1.0 + float(np.dot(final_noisy, final_noisy)))
-
-    ideal_labels = (ideal_slice[:, 2] >= 0).astype(int)
-    noisy_labels = (noisy_slice[:, 2] >= 0).astype(int)
-    classification_accuracy = float(np.mean(ideal_labels == noisy_labels))
-
-    fidelity = float(np.clip(fidelity, 0.0, 1.0))
-    purity = float(np.clip(purity, 0.0, 1.0))
-    classification_accuracy = float(np.clip(classification_accuracy, 0.0, 1.0))
-
-    return {
-        "fidelity": fidelity,
-        "purity": purity,
-        "classification_accuracy": classification_accuracy,
-    }
-
-def _density_to_bloch(rho_1q: np.ndarray):
-    """Convert 2x2 density matrix to Bloch vector [x,y,z]."""
-    rho_1q = np.asarray(rho_1q, dtype=np.complex128)
-    if rho_1q.shape != (2, 2):
-        return np.array([0.0, 0.0, 1.0], dtype=float)
-    rho00 = rho_1q[0, 0]
-    rho11 = rho_1q[1, 1]
-    rho01 = rho_1q[0, 1]
-    rx = 2.0 * np.real(rho01)
-    ry = -2.0 * np.imag(rho01)
-    rz = np.real(rho00 - rho11)
-    return np.array([rx, ry, rz], dtype=float)
-
-def _generate_noise_trajectory_with_extractor(
-    noise_type,
-    depolarizing_probability,
-    damping_rate,
-    backend_name,
-):
-    """
-    Build a simple single-qubit ideal vs noisy trajectory for the Noise Simulator panel.
-    Returns dict with ideal/noisy Bloch vectors.
-    """
-
-    kind_map = {
-        "depolarizing": "depolarizing",
-        "depol": "depolarizing",
-        "amplitude": "amplitude_damping",
-        "amplitude_damping": "amplitude_damping",
-        "phase": "phase_damping",
-        "phase_damping": "phase_damping",
-    }
-
-    error_kind = kind_map.get(
-        (noise_type or "depolarizing").strip().lower(),
-        "depolarizing",
-    )
-
-    backend_name = (backend_name or "").strip() or None
-    print(error_kind, depolarizing_probability, damping_rate, backend_name)
-    # ---- noise parameters per model ----
-    p_dep = depolarizing_probability if error_kind == "depolarizing" else 0.0
-    p_amp = damping_rate if error_kind == "amplitude_damping" else 0.0
-    p_phase = damping_rate if error_kind == "phase_damping" else 0.0
-
-    # Ideal = same noise model, zero strength
-    ne_ideal = NoiseExtractor(
-        p_1qubit=0.0,
-        p_2qubit=0.0,
-        error_kind=error_kind,
-        p_amp=0.0,
-        p_phase=0.0,
-    )
-
-    # Noisy = user-selected parameters
-    ne_noisy = NoiseExtractor(
-        p_1qubit=p_dep,
-        p_2qubit=0.0,
-        error_kind=error_kind,
-        p_amp=p_amp,
-        p_phase=p_phase,
-        ibm_backend_name=backend_name,
-    )
-
-    try:
-        from qiskit import QuantumCircuit
-    except Exception as exc:
-        raise RuntimeError(f"qiskit import failed: {exc}") from exc
-
-    steps = np.linspace(0.0, np.pi / 1.5, 15)
-    ideal_vectors = []
-    noisy_vectors = []
-
-    for theta in steps:
-        qc = QuantumCircuit(1)
-        qc.ry(theta, 0)
-        qc.rz(theta / 2.0, 0)
-
-        try:
-            rho_ideal = ne_ideal.simulate_circuit(qc)
-            rho_noisy = ne_noisy.simulate_circuit(qc)
-        except Exception:
-            if backend_name:
-                raise
-
-            # ---- analytic fallback (correct RY + RZ state) ----
-            c = np.cos(theta / 2.0)
-            s = np.sin(theta / 2.0)
-            phase = np.exp(1j * theta / 2.0)
-            psi = np.array([c, phase * s], dtype=np.complex128)
-
-            rho_ideal = np.outer(psi, np.conjugate(psi))
-            rho_noisy = ne_noisy.apply_noise_to_density_multi(rho_ideal)
-
-        ideal_vectors.append(_density_to_bloch(rho_ideal))
-        noisy_vectors.append(_density_to_bloch(rho_noisy))
-
-    meta_backend = backend_name or "synthetic"
-    meta = {
-        "backend": meta_backend,
-        "error_kind": error_kind,
-        "source": "extractor",
-    }
-
-    backend_err = getattr(ne_noisy, "ibm_backend_error", None)
-    if backend_err:
-        meta["backend_error"] = backend_err
-        meta["backend"] = f"{meta_backend} (fallback)"
-
-    return {
-        "ideal": ideal_vectors,
-        "noisy": noisy_vectors,
-        "time": list(range(len(steps))),
-        "meta": meta,
-    }
 
 @qml_app.callback(
     [
@@ -427,146 +263,38 @@ def reset_results_plot(num_clicks: int, num_qubits: int, num_layers: int, select
 
 
 @qml_app.callback(
-    [
-        Output(component_id="noise_trajectory_store", component_property="data"),
-        Output(component_id="noise_qasm_store", component_property="data"),
-    ],
+    Output(component_id="noise_trajectory_store", component_property="data"),
     inputs=[
         Input(component_id="select_noise_type", component_property="value"),
         Input(component_id="slider_depolarizing_probability", component_property="value"),
         Input(component_id="slider_damping_rate", component_property="value"),
-        Input(component_id="select_noise_backend", component_property="value"),
     ],
     prevent_initial_call=False,
 )
 def update_noise_simulator(noise_type: str,
                            depolarizing_probability: float,
-                           damping_rate: float,
-                           backend_name: str):
+                           damping_rate: float):
     """
-    Generate trajectories for ideal vs. noisy state evolution using NoiseExtractor and store them for animation.
+    Generate mock trajectories for ideal vs. noisy state evolution and store them for animation.
     """
     if noise_type is None:
-        return dash.no_update, dash.no_update
+        return dash.no_update
 
     depolarizing_probability = depolarizing_probability or 0.0
     damping_rate = damping_rate or 0.0
-    backend_name = (backend_name or "").strip() or None
 
-    try:
-        trajectory_data = _generate_noise_trajectory_with_extractor(
-            noise_type=noise_type,
-            depolarizing_probability=depolarizing_probability,
-            damping_rate=damping_rate,
-            backend_name=backend_name,
-        )
-    except Exception as exc:
-        logger.warning("NoiseExtractor trajectory failed: %s", exc)
-        return dash.no_update, dash.no_update
-
-    trajectory_data["meta"] = trajectory_data.get("meta", {}) or {}
-    if backend_name:
-        trajectory_data["meta"]["backend"] = backend_name
-
-    logger.info("Stored trajectory meta: %s", trajectory_data.get("meta"))
+    trajectory_data = generate_mock_trajectories(
+        noise_type=noise_type,
+        depolarizing_probability=depolarizing_probability,
+        damping_rate=damping_rate,
+    )
+    logger.info(
+        "Stored mock trajectory meta: %s",
+        trajectory_data.get("meta"),
+    )
     trajectory_data["version"] = time.time_ns()
 
-    qasm_payload = trajectory_data.get("meta", {}).get("qiskit_qasm_str", None)
-    return trajectory_data, qasm_payload
-
-
-@qml_app.callback(
-    Output(component_id="gate_importance_panel", component_property="children"),
-    inputs=[
-        Input(component_id="select_noise_type", component_property="value"),
-        Input(component_id="slider_depolarizing_probability", component_property="value"),
-        Input(component_id="slider_damping_rate", component_property="value"),
-        Input(component_id="select_noise_backend", component_property="value"),
-        Input(component_id="noise_qasm_store", component_property="data"),
-        Input(component_id="gate_score_qasm_input", component_property="value"),
-    ],
-    prevent_initial_call=False,
-)
-def update_gate_importance_panel(noise_type: str,
-                                 depolarizing_probability: float,
-                                 damping_rate: float,
-                                 backend_name: str,
-                                 qasm_from_store,
-                                 qasm_text: str):
-    """Render gate sensitivity chips keyed to the current noise settings."""
-
-    backend_name = (backend_name or "").strip() or None
-    qasm_text = qasm_text or qasm_from_store
-    print("QASM Text:", qasm_text)
-    circuit = None
-    warning_msg = None
-    if qasm_text and _QC is not None:
-        try:
-            circuit = _QC.from_qasm_str(qasm_text)
-        except Exception as exc:
-            warning_msg = f"QASM parse failed ({exc})"
-
-    scores = []
-    # try:
-    #     scores = gate_scores_via_extractor(
-    #         noise_type=noise_type,
-    #         depolarizing_probability=depolarizing_probability or 0.0,
-    #         damping_rate=damping_rate or 0.0,
-    #         ibm_backend_name=backend_name,
-    #         circuit=circuit,
-    #     ) or []
-    # except Exception as exc:
-    #     warning_msg = f"Gate scores unavailable ({exc})"
-    #     logger.warning("gate_scores_via_extractor failed: %s", exc)
-
-    def _score_band(score_val: float):
-        if score_val > 0.5:
-            return "high"
-        if score_val >= 0.2:
-            return "mid"
-        return "low"
-
-    max_val = max([float(s.get("score", 0.0) or 0.0) for s in scores], default=0.0)
-    gate_data = []
-    for idx, entry in enumerate(sorted(scores, key=lambda e: (-float(e.get("score", 0.0) or 0.0), str(e.get("gate", ""))))):
-        raw = float(entry.get("score", 0.0) or 0.0)
-        norm = raw / max_val if max_val > 0 else 0.0
-        gate_data.append({
-            "gate_id": idx,
-            "gate_name": str(entry.get("gate", "")).upper(),
-            "normalized_importance": norm,
-            "level": _score_band(norm),
-        })
-
-    chips = []
-    for item in gate_data[:12]:
-        pct = item["normalized_importance"] * 100.0
-        chips.append(
-            html.Div(
-                [
-                    html.Div(item["gate_name"], className="gate-chip-label"),
-                    html.Div(f"{pct:.0f}%", className="gate-chip-score"),
-                ],
-                className=f"gate-chip gate-chip-{item['level']}",
-                title=f"{item['gate_name']} importance {pct:.0f}%",
-            )
-        )
-
-    header_children = [f"Gate Sensitivity — {noise_type or 'Depolarizing'}"]
-    if backend_name:
-        header_children.append(html.Span(f"(backend: {backend_name})", style={"color": "#6c757d", "marginLeft": "8px"}))
-
-    blocks = [html.Div(header_children, style={"fontWeight": "600", "marginBottom": "6px", "display": "flex", "gap": "6px"})]
-    if warning_msg:
-        blocks.append(html.Div(warning_msg, style={"fontSize": "12px", "color": "#d9534f", "marginBottom": "6px"}))
-        return blocks
-
-    if chips:
-        blocks.append(html.Div(chips, className="gate-chip-row"))
-    else:
-        blocks.append(html.Div("No gate scores available.", style={"fontSize": "12px", "color": "#6c757d"}))
-
-    return blocks
+    return trajectory_data
 
 
 @qml_app.callback(
@@ -585,12 +313,11 @@ def update_gate_importance_panel(noise_type: str,
 )
 def animate_noise_simulator(interval_count: int,
                             trajectory_data,
-                            animation_state,
-                            *_) -> tuple:
+                            animation_state):
     """
-    Animate the noise trajectories by progressively revealing Bloch sphere paths.
+    Animate the mock noise trajectories by progressively revealing Bloch sphere paths.
     """
-    if trajectory_data is None or not isinstance(trajectory_data, dict):
+    if trajectory_data is None:
         base_fig = make_noise_comparison_plot()
         return base_fig, {"frame": 0, "version": None}
 
@@ -623,33 +350,6 @@ def animate_noise_simulator(interval_count: int,
     }
 
     return comparison_fig, new_animation_state
-
-
-@qml_app.callback(
-    Output(component_id="noise_metrics_container", component_property="children"),
-    inputs=[
-        Input(component_id="noise_animation_state", component_property="data"),
-        Input(component_id="noise_trajectory_store", component_property="data"),
-    ],
-    prevent_initial_call=False,
-)
-def update_noise_metrics_table(animation_state, trajectory_data):
-    """Update the metrics table to reflect the currently displayed Bloch frame."""
-    if trajectory_data is None:
-        return [
-            html.H3("Performance Metrics", style={"marginTop": "0px"}),
-            build_noise_metrics_table(),
-        ]
-
-    frame_idx = None
-    if animation_state and animation_state.get("version") == trajectory_data.get("version"):
-        frame_idx = animation_state.get("frame")
-
-    metrics = _compute_noise_metrics(trajectory_data, frame_idx)
-    return [
-        html.H3("Performance Metrics", style={"marginTop": "0px"}),
-        build_noise_metrics_table(metrics),
-    ]
 
 
 @qml_app.callback(
