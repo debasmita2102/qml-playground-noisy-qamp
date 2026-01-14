@@ -3,6 +3,111 @@ from dash import html
 
 from data.datasets_torch import classification_datasets
 
+
+def build_noise_metrics_table(metrics=None):
+    """Render a compact, visual card summarizing fidelity/purity/accuracy."""
+    metrics = metrics or {}
+
+    config = [
+        {
+            "key": "fidelity",
+            "label": "Fidelity",
+            "subtitle": "|⟨ψ_ideal|ψ_noisy⟩|²",
+            "color": "#0f9d58",
+            "formatter": lambda v: f"{v:.3f}",
+        },
+        {
+            "key": "purity",
+            "label": "Purity",
+            "subtitle": "Tr(ρ²)",
+            "color": "#4285f4",
+            "formatter": lambda v: f"{v:.3f}",
+        },
+        {
+            "key": "classification_accuracy",
+            "label": "Accuracy",
+            "subtitle": "Class agreement",
+            "color": "#ea4335",
+            "formatter": lambda v: f"{v * 100:.1f}%",
+        },
+    ]
+
+    metric_rows = []
+    for item in config:
+        raw_value = metrics.get(item["key"])
+        is_valid = raw_value is not None and raw_value == raw_value
+        if is_valid:
+            clamped_value = max(0.0, min(1.0, float(raw_value)))
+        else:
+            clamped_value = 0.0
+        display_value = item["formatter"](clamped_value) if is_valid else "--"
+
+        metric_rows.append(
+            html.Div(
+                [
+                    html.Div(
+                        [
+                            html.Div(
+                                [
+                                    html.Span(
+                                        "",
+                                        style={
+                                            "display": "inline-block",
+                                            "width": "10px",
+                                            "height": "10px",
+                                            "borderRadius": "50%",
+                                            "backgroundColor": item["color"],
+                                        },
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Div(item["label"], style={"fontWeight": "600"}),
+                                            html.Div(item["subtitle"], style={"fontSize": "11px", "color": "#6c757d"}),
+                                        ],
+                                    ),
+                                ],
+                                style={"display": "flex", "alignItems": "center", "gap": "10px"},
+                            ),
+                        ],
+                        style={"flex": "1"},
+                    ),
+                    html.Div(display_value, style={"fontWeight": "600", "color": item["color"]}),
+                    html.Div(
+                        style={
+                            "width": "100%",
+                            "height": "6px",
+                            "backgroundColor": "#edf2f7",
+                            "borderRadius": "4px",
+                            "marginTop": "6px",
+                        },
+                        children=html.Div(
+                            style={
+                                "width": f"{clamped_value * 100:.1f}%",
+                                "height": "100%",
+                                "backgroundColor": item["color"],
+                                "borderRadius": "4px",
+                                "transition": "width 0.3s ease-out",
+                            }
+                        ),
+                    ),
+                ],
+                className="noise-metric-row",
+                style={
+                    "display": "flex",
+                    "flexDirection": "column",
+                    "gap": "4px",
+                    "padding": "8px 0px",
+                    "borderBottom": "1px solid rgba(0,0,0,0.05)",
+                },
+            )
+        )
+
+    return html.Div(
+        metric_rows,
+        className="noise-metrics-table",
+        style={"display": "flex", "flexDirection": "column", "gap": "6px"},
+    )
+
 control = html.Div([
     html.H2("Control"),
     html.A(children=html.Img(src="assets/github.svg", className="github-logo"),
@@ -216,10 +321,33 @@ result_plot = html.Div([
 noise_simulator_panel = html.Div([
     html.H2("Noise Simulator"),
     html.Div([
-        dcc.Graph(
-            id="graph_noise_comparison",
-            style={"width": 650, "height": 320}
-        ),
+        html.Div([
+            dcc.Graph(
+                id="graph_noise_comparison",
+                style={"width": 650, "height": 320}
+            ),
+            html.Div(
+                id="noise_metrics_container",
+                children=[
+                    html.H3("Performance Metrics", style={"marginTop": "0px"}),
+                    build_noise_metrics_table(),
+                ],
+                style={
+                    "width": "320px",
+                    "minWidth": "260px",
+                    "backgroundColor": "rgba(255, 255, 255, 0.92)",
+                    "borderRadius": "14px",
+                    "padding": "18px 20px",
+                    "boxShadow": "0 15px 30px rgba(0, 0, 0, 0.08)",
+                }
+            ),
+        ], style={
+            "display": "flex",
+            "flexWrap": "nowrap",
+            "gap": "18px",
+            "justifyContent": "flex-start",
+            "alignItems": "stretch"
+        }),
         html.Div([
             html.Div([
                 html.Label("Noise Type", style={"fontWeight": "600", "marginBottom": "6px"}),
@@ -233,6 +361,21 @@ noise_simulator_panel = html.Div([
                     value="Depolarizing",
                     clearable=False,
                     style={"width": "100%"}
+                ),
+            ], style={"marginBottom": "18px"}),
+            html.Div([
+                html.Label("IBM Backend (optional)", style={"fontWeight": "600", "marginBottom": "6px"}),
+                dcc.Dropdown(
+                    id="select_noise_backend",
+                    options=[
+                        {"label": "Auto (Aer)", "value": ""},
+                        {"label": "ibmq_qasm_simulator", "value": "ibmq_qasm_simulator"},
+                        {"label": "ibm_oslo", "value": "ibm_oslo"},
+                        {"label": "ibm_brisbane", "value": "ibm_brisbane"},
+                    ],
+                    placeholder="Select backend or leave empty",
+                    clearable=True,
+                    style={"width": "100%"},
                 ),
             ], style={"marginBottom": "18px"}),
             html.Div([
@@ -283,6 +426,24 @@ noise_simulator_panel = html.Div([
     ], className="rowContainer",
         style={"justify-content": "space-between", "align-items": "stretch", "gap": "24px"}
     ),
+    html.Div(
+        id="gate_importance_panel",
+        className="gate-chip-panel",
+        children=[
+            html.Div("Gate Sensitivity (by noise)", style={"fontWeight": "600", "marginBottom": "6px"}),
+            html.Div(
+                ["Loading gate scores..."],
+                className="gate-chip-row",
+            ),
+        ],
+        style={
+            "marginTop": "12px",
+            "backgroundColor": "rgba(255, 255, 255, 0.9)",
+            "borderRadius": "10px",
+            "padding": "12px 14px",
+            "boxShadow": "0 10px 24px rgba(0,0,0,0.05)",
+        },
+    ),
     dcc.Interval(
         id="noise_animation_interval",
         interval=200,
@@ -296,7 +457,9 @@ layout_rows = [
     dcc.Store(id="train_datastore"),
     dcc.Store(id="test_datastore"),
     dcc.Store(id="model_parameters"),
+    dcc.Textarea(id="gate_score_qasm_input", style={"display": "none"}),
     dcc.Store(id="noise_trajectory_store"),
+    dcc.Store(id="noise_qasm_store"),
     dcc.Store(id="noise_animation_state", data={"frame": 0, "version": None}),
     dcc.Store(id="metrics"),
     dcc.Store(id="quantum_state_store"),

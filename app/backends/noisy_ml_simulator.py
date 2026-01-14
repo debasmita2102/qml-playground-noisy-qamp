@@ -15,9 +15,9 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any, Dict, Optional
 import numpy as np
-from app.backends.qiskit_noise_extractor import NoiseExtractor
-from app.backends.circuit_bridge import CircuitBridge
-from app.backends.torch_state_vector_simulator import StateVecSimTorch
+from .qiskit_noise_extractor import NoiseExtractor
+from .circuit_bridge import CircuitBridge
+from .torch_state_vector_simulator import StateVecSimTorch
 
 __all__ = ["NoisyMLSimulator"]
 

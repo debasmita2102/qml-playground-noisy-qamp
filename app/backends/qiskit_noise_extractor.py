@@ -1,5 +1,8 @@
-from typing import Optional
+from __future__ import annotations
+
+from typing import Optional, Callable
 import numpy as _np
+import logging
 
 _IMPORT_ERROR = None
 try:
@@ -22,6 +25,8 @@ else:
 
 __all__ = ["NoiseExtractor"]
 
+_logger = logging.getLogger(__name__)
+
 class NoiseExtractor:
     """Build and run simple noise models (depolarizing and/or amplitude damping/phase damping)
     using Qiskit Aer.
@@ -39,6 +44,8 @@ class NoiseExtractor:
         error_kind: str = "depolarizing",
         p_amp: Optional[float] = None,
         p_phase: Optional[float] = None,
+        ibm_backend_name: Optional[str] = None,
+        provider_loader: Optional[Callable] = None,
     ):
         if _IMPORT_ERROR is not None:
             raise RuntimeError(
@@ -51,10 +58,28 @@ class NoiseExtractor:
         self.error_kind = str(error_kind).lower()
         self.p_amp = float(p_amp) if p_amp is not None else self.p_1qubit
         self.p_phase = float(p_phase) if p_phase is not None else self.p_1qubit
+        self.ibm_backend_name = None if ibm_backend_name is None else (str(ibm_backend_name).strip() or None)
+        self.ibm_backend_error: Optional[str] = None
+        self.ibm_backend = None
+        self._provider_loader = provider_loader
 
         # Build noise model & simulator
         self.noise_model = self._build_noise_model()
         self.simulator = AerSimulator(noise_model=self.noise_model, method="density_matrix")
+
+        # Optionally override with a real IBM backend noise model
+        if self.ibm_backend_name:
+            try:
+                backend = self._load_ibm_backend(self.ibm_backend_name, self._provider_loader)
+                self.ibm_backend = backend
+                self.build_noise_from_backend(backend)
+            except Exception as exc:
+                self.ibm_backend_error = str(exc)
+                _logger.warning(
+                    "Falling back to synthetic noise model; IBM backend '%s' unavailable: %s",
+                    self.ibm_backend_name,
+                    exc,
+                )
 
     @staticmethod
     def _kraus_amplitude_damping(gamma: float):
@@ -153,6 +178,57 @@ class NoiseExtractor:
                 pass
 
         return nm
+
+    @staticmethod
+    def _load_ibm_backend(backend_name: str, provider_loader: Optional[Callable] = None):
+        """Fetch an IBM backend by name using either a supplied provider loader, the modern
+        qiskit-ibm-provider API, or the legacy IBMQ provider. Raises on failure so callers can
+        decide whether to fall back.
+        """
+
+        name = str(backend_name or "").strip()
+        if not name:
+            raise ValueError("backend_name must be a non-empty string")
+
+        errors = []
+        provider = None
+
+        if provider_loader is not None:
+            try:
+                provider = provider_loader()
+            except Exception as exc:
+                errors.append(exc)
+
+        if provider is None:
+            try:
+                from qiskit_ibm_provider import IBMProvider
+
+                provider = IBMProvider()
+            except Exception as exc:
+                errors.append(exc)
+
+        if provider is None:
+            try:
+                from qiskit import IBMQ
+
+                try:
+                    IBMQ.load_account()
+                except Exception:
+                    pass
+                provider = IBMQ.get_provider()
+            except Exception as exc:
+                errors.append(exc)
+
+        if provider is None:
+            err_txt = "; ".join([str(e) for e in errors if e]) or "unknown error"
+            raise RuntimeError(
+                f"Could not load IBM backend '{name}'. Install 'qiskit-ibm-provider' and ensure credentials are set. Errors: {err_txt}"
+            )
+
+        try:
+            return provider.get_backend(name)
+        except Exception as exc:
+            raise RuntimeError(f"Backend '{name}' not found or unavailable from provider: {exc}") from exc
 
     def build_noise_from_backend(self, backend) -> NoiseModel:
         """Build a NoiseModel from a real backend object (requires IBM provider backend)."""
