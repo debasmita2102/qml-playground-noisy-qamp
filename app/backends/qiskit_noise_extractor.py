@@ -432,7 +432,8 @@ class NoiseExtractor:
                 pass
 
         return nm
-    # Build T1/T2 -> amplitude+phase damping NoiseModel (simple)
+
+
     def build_noise_model_from_t1t2(self, cal: dict,
                                     one_q_gate_time_s: float,
                                     two_q_gate_time_s: float = 200e-9,
@@ -475,22 +476,27 @@ class NoiseExtractor:
                     p_phase = 1.0 - _np.exp(-one_q_gate_time_s / T2)
                     p_phase = max(0.0, min(1.0, p_phase))
 
+            # Compose errors instead of adding separately
+            combined_error = None
             if p_amp is not None and amplitude_damping_error is not None:
-                err_amp = amplitude_damping_error(p_amp)
-                for g in one_q_gates:
-                    try:
-                        nm.add_quantum_error(err_amp, g, qubits=[q])
-                    except Exception:
-                        pass
-
+                combined_error = amplitude_damping_error(p_amp)
+            
             if p_phase is not None and phase_damping_error is not None:
                 err_phase = phase_damping_error(p_phase)
+                if combined_error is not None:
+                    combined_error = combined_error.compose(err_phase)
+                else:
+                    combined_error = err_phase
+            
+            # Add the combined error once per gate
+            if combined_error is not None:
                 for g in one_q_gates:
                     try:
-                        nm.add_quantum_error(err_phase, g, qubits=[q])
+                        nm.add_quantum_error(combined_error, g, qubits=[q])
                     except Exception:
                         pass
 
+        # Two-qubit gates
         attached = False
         for k, v in ge.items():
             if isinstance(k, tuple) and len(k) == 2 and all(isinstance(x, int) for x in k):
@@ -512,7 +518,6 @@ class NoiseExtractor:
                 pass
 
         return nm
-
 
     def simulate_circuit(self, qc: QuantumCircuit, shots: int = 1) -> _np.ndarray:
         """
