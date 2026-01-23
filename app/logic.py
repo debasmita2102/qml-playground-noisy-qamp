@@ -8,7 +8,7 @@ import numpy as np
 import torch
 
 import dash
-from dash import ctx, clientside_callback, html
+from dash import ctx, clientside_callback
 from dash.dependencies import Input, Output, State, ClientsideFunction
 
 from data.datasets_torch import create_dataset, create_target, classification_datasets, regression_datasets
@@ -18,13 +18,9 @@ from models.reuploading_regressor import QuantumReuploadingRegressor
 
 from utils.serialization import serialize_quantum_states, unserialize_quantum_states, unserialize_model_dict
 from utils.trace_updates import create_extendData_dicts
+from utils.noise_simulator_mock import generate_mock_trajectories
 
-from backends.qiskit_noise_extractor import NoiseExtractor
-try:
-    from qiskit import QuantumCircuit as _QC
-except Exception:
-    _QC = None
-from layout import layout_overall, build_noise_metrics_table
+from layout import layout_overall
 from plotting import *
 
 qml_app = dash.Dash(__name__, url_base_pathname='/qml-playground/', title="QML Playground")
@@ -449,31 +445,25 @@ def reset_results_plot(num_clicks: int, num_qubits: int, num_layers: int, select
 
 
 @qml_app.callback(
-    [
-        Output(component_id="noise_trajectory_store", component_property="data"),
-        Output(component_id="noise_qasm_store", component_property="data"),
-    ],
+    Output(component_id="noise_trajectory_store", component_property="data"),
     inputs=[
         Input(component_id="select_noise_type", component_property="value"),
         Input(component_id="slider_depolarizing_probability", component_property="value"),
         Input(component_id="slider_damping_rate", component_property="value"),
-        Input(component_id="select_noise_backend", component_property="value"),
     ],
     prevent_initial_call=False,
 )
 def update_noise_simulator(noise_type: str,
                            depolarizing_probability: float,
-                           damping_rate: float,
-                           backend_name: str):
+                           damping_rate: float):
     """
-    Generate trajectories for ideal vs. noisy state evolution using NoiseExtractor and store them for animation.
+    Generate mock trajectories for ideal vs. noisy state evolution and store them for animation.
     """
     if noise_type is None:
-        return dash.no_update, dash.no_update
+        return dash.no_update
 
     depolarizing_probability = depolarizing_probability or 0.0
     damping_rate = damping_rate or 0.0
-    backend_name = (backend_name or "").strip() or None
 
     try:
         trajectory_data = _generate_noise_trajectory_with_extractor(
@@ -606,12 +596,11 @@ def update_gate_importance_panel(noise_type: str,
 )
 def animate_noise_simulator(interval_count: int,
                             trajectory_data,
-                            animation_state,
-                            *_) -> tuple:
+                            animation_state):
     """
-    Animate the noise trajectories by progressively revealing Bloch sphere paths.
+    Animate the mock noise trajectories by progressively revealing Bloch sphere paths.
     """
-    if trajectory_data is None or not isinstance(trajectory_data, dict):
+    if trajectory_data is None:
         base_fig = make_noise_comparison_plot()
         return base_fig, {"frame": 0, "version": None}
 
@@ -644,33 +633,6 @@ def animate_noise_simulator(interval_count: int,
     }
 
     return comparison_fig, new_animation_state
-
-
-@qml_app.callback(
-    Output(component_id="noise_metrics_container", component_property="children"),
-    inputs=[
-        Input(component_id="noise_animation_state", component_property="data"),
-        Input(component_id="noise_trajectory_store", component_property="data"),
-    ],
-    prevent_initial_call=False,
-)
-def update_noise_metrics_table(animation_state, trajectory_data):
-    """Update the metrics table to reflect the currently displayed Bloch frame."""
-    if trajectory_data is None:
-        return [
-            html.H3("Performance Metrics", style={"marginTop": "0px"}),
-            build_noise_metrics_table(),
-        ]
-
-    frame_idx = None
-    if animation_state and animation_state.get("version") == trajectory_data.get("version"):
-        frame_idx = animation_state.get("frame")
-
-    metrics = _compute_noise_metrics(trajectory_data, frame_idx)
-    return [
-        html.H3("Performance Metrics", style={"marginTop": "0px"}),
-        build_noise_metrics_table(metrics),
-    ]
 
 
 @qml_app.callback(
