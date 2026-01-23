@@ -36,6 +36,23 @@ logger = logging.getLogger(" [DASH Callback]")
 reset_triggers = ["reset_button", "select_num_qubits", "select_num_layers", "select_data_set", "select_task_type"]
 
 
+def _env_ibm_provider_loader():
+    """
+    Build a provider loader from environment hints (QISKIT_IBM_*). Returns None if
+    nothing is configured or if the provider cannot be constructed.
+    """
+    try:
+        provider = NoiseExtractor._provider_from_env()
+    except Exception as exc:
+        logger.debug("IBM env provider unavailable: %s", exc)
+        return None
+
+    if provider is None:
+        return None
+
+    return lambda: provider
+
+
 def _compute_noise_metrics(trajectory_data, frame_idx=None):
     """Return fidelity, purity, and accuracy stats for the current noise frame."""
     if trajectory_data is None:
@@ -118,11 +135,12 @@ def _generate_noise_trajectory_with_extractor(
     )
 
     backend_name = (backend_name or "").strip() or None
-    print(error_kind, depolarizing_probability, damping_rate, backend_name)
     # ---- noise parameters per model ----
     p_dep = depolarizing_probability if error_kind == "depolarizing" else 0.0
     p_amp = damping_rate if error_kind == "amplitude_damping" else 0.0
     p_phase = damping_rate if error_kind == "phase_damping" else 0.0
+
+    provider_loader = _env_ibm_provider_loader()
 
     # Ideal = same noise model, zero strength
     ne_ideal = NoiseExtractor(
@@ -131,6 +149,7 @@ def _generate_noise_trajectory_with_extractor(
         error_kind=error_kind,
         p_amp=0.0,
         p_phase=0.0,
+        provider_loader=provider_loader,
     )
 
     # Noisy = user-selected parameters
@@ -141,6 +160,7 @@ def _generate_noise_trajectory_with_extractor(
         p_amp=p_amp,
         p_phase=p_phase,
         ibm_backend_name=backend_name,
+        provider_loader=provider_loader,
     )
 
     try:
@@ -182,6 +202,8 @@ def _generate_noise_trajectory_with_extractor(
         "error_kind": error_kind,
         "source": "extractor",
     }
+    if provider_loader:
+        meta["provider_source"] = "env"
 
     backend_err = getattr(ne_noisy, "ibm_backend_error", None)
     if backend_err:
@@ -468,7 +490,7 @@ def update_noise_simulator(noise_type: str,
     if backend_name:
         trajectory_data["meta"]["backend"] = backend_name
 
-    logger.info("Stored trajectory meta: %s", trajectory_data.get("meta"))
+    logger.debug("Stored trajectory meta: %s", trajectory_data.get("meta"))
     trajectory_data["version"] = time.time_ns()
 
     qasm_payload = trajectory_data.get("meta", {}).get("qiskit_qasm_str", None)
@@ -497,7 +519,6 @@ def update_gate_importance_panel(noise_type: str,
 
     backend_name = (backend_name or "").strip() or None
     qasm_text = qasm_text or qasm_from_store
-    print("QASM Text:", qasm_text)
     circuit = None
     warning_msg = None
     if qasm_text and _QC is not None:

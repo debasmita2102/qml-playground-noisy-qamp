@@ -370,6 +370,7 @@ noise_simulator_panel = html.Div([
                     options=[
                         {"label": "Auto (Aer)", "value": ""},
                         {"label": "ibmq_qasm_simulator", "value": "ibmq_qasm_simulator"},
+                        {"label": "ibm_fez", "value": "ibm_fez"},
                         {"label": "ibm_oslo", "value": "ibm_oslo"},
                         {"label": "ibm_brisbane", "value": "ibm_brisbane"},
                     ],

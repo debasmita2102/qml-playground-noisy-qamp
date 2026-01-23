@@ -13,7 +13,7 @@ Design goals:
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Callable
 import numpy as np
 from .qiskit_noise_extractor import NoiseExtractor
 from .circuit_bridge import CircuitBridge
@@ -39,6 +39,11 @@ class NoisyMLSimulator(StateVecSimTorch):
     track_noise : bool
         enable/disable noisy simulation. If True but qiskit isn't installed, noisy
         path will be disabled and a warning printed.
+    ibm_backend_name : str, optional
+        if provided, attempt to pull the noise model from a real IBM backend (requires
+        qiskit-ibm-provider credentials/environment).
+    ibm_provider_loader : callable, optional
+        custom callable returning a provider; useful for injecting authenticated providers.
     gpu, seed, **kwargs : passed to parent
     """
 
@@ -51,6 +56,8 @@ class NoisyMLSimulator(StateVecSimTorch):
         track_noise: bool = True,
         gpu: bool = False,
         seed: int = 42,
+        ibm_backend_name: Optional[str] = None,
+        ibm_provider_loader: Optional[Callable] = None,
         **kwargs,
     ):
         super().__init__(n_qubits=n_qubits, n_layers=n_layers, gpu=gpu, seed=seed, **kwargs)
@@ -58,13 +65,20 @@ class NoisyMLSimulator(StateVecSimTorch):
         self.p_1qubit = float(p_1qubit)
         self.p_2qubit = float(p_2qubit)
         self.track_noise = bool(track_noise)
+        self.ibm_backend_name = ibm_backend_name
+        self.ibm_provider_loader = ibm_provider_loader
 
         self.circuit_bridge = CircuitBridge(n_qubits=self.n_qubits)
 
         self.noise_extractor: Optional[Any] = None
         if self.track_noise:
-                self.noise_extractor = NoiseExtractor(p_1qubit=self.p_1qubit, p_2qubit=self.p_2qubit)
-                
+            self.noise_extractor = NoiseExtractor(
+                p_1qubit=self.p_1qubit,
+                p_2qubit=self.p_2qubit,
+                ibm_backend_name=self.ibm_backend_name,
+                provider_loader=self.ibm_provider_loader,
+            )
+
         self.ideal_states: list = []
         self.ideal_bloch_trajectory: list = []
 
