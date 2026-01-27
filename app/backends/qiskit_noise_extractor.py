@@ -1,5 +1,10 @@
-from typing import Optional
+from __future__ import annotations
+
+import os
+from typing import Optional, Callable
 import numpy as _np
+import logging
+import socket
 
 _IMPORT_ERROR = None
 try:
@@ -55,6 +60,9 @@ class NoiseExtractor:
         error_kind: str = "depolarizing",
         p_amp: Optional[float] = None,
         p_phase: Optional[float] = None,
+        ibm_backend_name: Optional[str] = None,
+        provider_loader: Optional[Callable] = None,
+        allow_fake_provider: Optional[bool] = None,
     ):
         if _IMPORT_ERROR is not None:
             raise RuntimeError(
@@ -67,10 +75,35 @@ class NoiseExtractor:
         self.error_kind = str(error_kind).lower()
         self.p_amp = float(p_amp) if p_amp is not None else self.p_1qubit
         self.p_phase = float(p_phase) if p_phase is not None else self.p_1qubit
+        self.ibm_backend_name = None if ibm_backend_name is None else (str(ibm_backend_name).strip() or None)
+        self.ibm_backend_error: Optional[str] = None
+        self.ibm_backend = None
+        self._provider_loader = provider_loader
+        # Allow fake provider fallback only when explicitly requested (env or argument).
+        if allow_fake_provider is None:
+            env_allow_fake = os.getenv("NOISE_EXTRACTOR_ALLOW_FAKE_PROVIDER")
+            allow_fake_provider = str(env_allow_fake).lower() in ("1", "true", "yes", "on") if env_allow_fake is not None else False
+        self.allow_fake_provider = bool(allow_fake_provider)
 
         # Build noise model & simulator
         self.noise_model = self._build_noise_model()
         self.simulator = AerSimulator(noise_model=self.noise_model, method="density_matrix")
+
+        # Optionally override with a real IBM backend noise model
+        if self.ibm_backend_name:
+            try:
+                self.load_ibm_backend(
+                    self.ibm_backend_name,
+                    provider_loader=self._provider_loader,
+                    allow_fake_provider=self.allow_fake_provider,
+                )
+            except Exception as exc:
+                self.ibm_backend_error = str(exc)
+                _logger.warning(
+                    "Falling back to synthetic noise model; IBM backend '%s' unavailable: %s",
+                    self.ibm_backend_name,
+                    exc,
+                )
 
     @staticmethod
     def _kraus_amplitude_damping(gamma: float):

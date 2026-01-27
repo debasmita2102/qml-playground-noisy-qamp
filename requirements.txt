@@ -3,3 +3,7 @@ gunicorn==23.0.0
 pandas==2.2.3
 plotly==6.1.1
 torch==2.7.0
+qiskit==2.2.3
+qiskit-aer>=0.17.2
+qiskit-ibm-provider>=0.11
+qiskit-ibm-runtime>=0.45

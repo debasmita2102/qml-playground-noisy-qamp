@@ -236,6 +236,22 @@ noise_simulator_panel = html.Div([
                 ),
             ], style={"marginBottom": "18px"}),
             html.Div([
+                html.Label("IBM Backend (optional)", style={"fontWeight": "600", "marginBottom": "6px"}),
+                dcc.Dropdown(
+                    id="select_noise_backend",
+                    options=[
+                        {"label": "Auto (Aer)", "value": ""},
+                        {"label": "ibmq_qasm_simulator", "value": "ibmq_qasm_simulator"},
+                        {"label": "ibm_fez", "value": "ibm_fez"},
+                        {"label": "ibm_oslo", "value": "ibm_oslo"},
+                        {"label": "ibm_brisbane", "value": "ibm_brisbane"},
+                    ],
+                    placeholder="Select backend or leave empty",
+                    clearable=True,
+                    style={"width": "100%"},
+                ),
+            ], style={"marginBottom": "18px"}),
+            html.Div([
                 html.Label("Depolarizing Probability", style={"fontWeight": "600"}),
                 html.Span("(dep only)", style={"color": "#6c757d", "fontSize": "12px", "marginLeft": "6px"}),
                 dcc.Slider(
