@@ -216,79 +216,179 @@ result_plot = html.Div([
 noise_simulator_panel = html.Div([
     html.H2("Noise Simulator"),
     html.Div([
+    html.Div([
         dcc.Graph(
             id="graph_noise_comparison",
-            style={"width": 650, "height": 320}
+            style={
+                "width": "100%",
+                "maxWidth": "700px",
+                "height": 320,
+                "marginBottom": "0",
+                "marginLeft": "auto",
+                "marginRight": "auto"
+            },
+            config={"displayModeBar": False}
         ),
         html.Div([
             html.Div([
-                html.Label("Noise Type", style={"fontWeight": "600", "marginBottom": "6px"}),
-                dcc.Dropdown(
-                    id="select_noise_type",
-                    options=[
-                        {"label": "Depolarizing", "value": "Depolarizing"},
-                        {"label": "Amplitude", "value": "Amplitude"},
-                        {"label": "Phase", "value": "Phase"},
-                    ],
-                    value="Depolarizing",
-                    clearable=False,
-                    style={"width": "100%"}
-                ),
-            ], style={"marginBottom": "18px"}),
+                html.H3("Performance Metrics", style={
+                    "fontWeight": "700",
+                    "marginBottom": "16px",
+                    "fontSize": "17px",
+                    "color": "#2c3e50",
+                    "borderBottom": "2px solid #3498db",
+                    "paddingBottom": "8px"
+                }),
+                html.Div(id="noise_metrics_display", style={
+                    "fontSize": "14px",
+                    "lineHeight": "2"
+                }),
+            ], style={
+                "flex": "1",
+                "backgroundColor": "rgba(255, 255, 255, 0.98)",
+                "borderRadius": "12px",
+                "padding": "16px",
+                # "boxShadow": "0 6px 22px rgba(0, 0, 0, 0.08)",
+                # "border": "1px solid rgba(0, 0, 0, 0.05)",
+                "minWidth": "260px"
+            }),
             html.Div([
-                html.Label("Depolarizing Probability", style={"fontWeight": "600"}),
-                html.Span("(dep only)", style={"color": "#6c757d", "fontSize": "12px", "marginLeft": "6px"}),
-                dcc.Slider(
-                    id="slider_depolarizing_probability",
-                    min=0.0,
-                    max=0.5,
-                    step=0.01,
-                    value=0.1,
-                    marks=None,
-                    tooltip={"placement": "bottom", "always_visible": True},
-                    className="noise-slider",
-                ),
-                html.Div([
-                    html.Span("0.0", style={"fontSize": "12px", "color": "#6c757d"}),
-                    html.Span("0.5", style={"fontSize": "12px", "color": "#6c757d"})
-                ], style={"display": "flex", "justifyContent": "space-between", "marginTop": "4px"})
-            ], style={"marginBottom": "20px"}),
-            html.Div([
-                html.Label("Damping Rate (gamma)", style={"fontWeight": "600"}),
-                dcc.Slider(
-                    id="slider_damping_rate",
-                    min=0.0,
-                    max=1.0,
-                    step=0.01,
-                    value=0.2,
-                    marks=None,
-                    tooltip={"placement": "bottom", "always_visible": True},
-                    className="noise-slider",
-                ),
-                html.Div([
-                    html.Span("0.0", style={"fontSize": "12px", "color": "#6c757d"}),
-                    html.Span("1.0", style={"fontSize": "12px", "color": "#6c757d"})
-                ], style={"display": "flex", "justifyContent": "space-between", "marginTop": "4px"})
-            ]),
-        ], className="columnContainer",
-            style={
-                "width": "32%",
-                "minWidth": "240px",
-                "backgroundColor": "rgba(255, 255, 255, 0.75)",
-                "borderRadius": "10px",
-                "padding": "18px 20px",
-                "boxShadow": "0 10px 30px rgba(0, 0, 0, 0.05)",
-            }
+                html.H3("Gate Importance", style={
+                    "fontWeight": "700",
+                    "marginBottom": "16px",
+                    "fontSize": "17px",
+                    "color": "#2c3e50",
+                    "borderBottom": "2px solid #e74c3c",
+                    "paddingBottom": "8px"
+                }),
+                html.Div(id="gate_importance_panel", style={
+                    "fontSize": "13px"
+                }),
+            ], style={
+                "flex": "1",
+                "backgroundColor": "rgba(255, 255, 255, 0.98)",
+                "borderRadius": "12px",
+                "padding": "16px",
+                # "boxShadow": "0 6px 22px rgba(0, 0, 0, 0.08)",
+                # "border": "1px solid rgba(0, 0, 0, 0.05)",
+                "minWidth": "260px"
+            }),
+        ], style={
+            "display": "flex",
+            "gap": "10px",
+            "marginTop": "8px",
+            "flexWrap": "wrap",
+            "justifyContent": "flex-start"
+        }),
+    ], className="noiseContent"),
+    html.Div([
+        html.Div([
+            html.Label("Noise Type", style={"fontWeight": "700", "marginBottom": "8px", "fontSize": "15px"}),
+            dcc.Dropdown(
+                id="select_noise_type",
+                options=[
+                    {"label": "Depolarizing", "value": "Depolarizing"},
+                    {"label": "Amplitude", "value": "Amplitude"},
+                    {"label": "Phase", "value": "Phase"},
+                ],
+                value="Depolarizing",
+                clearable=False,
+                style={"width": "100%"}
+            ),
+        ], style={"marginBottom": "20px"}),
+        html.Div([
+            html.Label("QASM Input (optional)", style={"fontWeight": "700", "marginBottom": "8px", "fontSize": "15px"}),
+            dcc.Textarea(
+                id="gate_score_qasm_input",
+                placeholder="Paste QASM code here...",
+                style={
+                    "width": "100%",
+                    "minHeight": "90px",
+                    "fontSize": "13px",
+                    "fontFamily": "monospace",
+                    "borderRadius": "12px",
+                    "border": "1px solid #dfe3ea",
+                    "padding": "12px",
+                    "boxShadow": "inset 0 1px 2px rgba(0, 0, 0, 0.02)"
+                }
+            ),
+        ], style={"marginBottom": "20px"}),
+        html.Div([
+            html.Label("IBM Backend (optional)", style={"fontWeight": "700", "marginBottom": "8px", "fontSize": "15px"}),
+            dcc.Dropdown(
+                id="select_noise_backend",
+                options=[
+                    {"label": "Auto (Aer)", "value": ""},
+                    {"label": "ibm_fez", "value": "ibm_fez"},
+                    {"label": "ibm_oslo", "value": "ibm_oslo"},
+                    {"label": "ibm_brisbane", "value": "ibm_brisbane"},
+                ],
+                placeholder="Select backend or leave empty",
+                clearable=True,
+                style={"width": "100%"},
+            ),
+        ], style={"marginBottom": "22px"}),
+        html.Div(
+            id="ibm_backend_status",
+            className="ibm-backend-status",
+            children="Using local Aer noise model.",
+            style={"marginBottom": "12px"}
         ),
-    ], className="rowContainer",
-        style={"justify-content": "space-between", "align-items": "stretch", "gap": "24px"}
+        html.Div([
+            html.Div([
+                html.Label("Depolarizing Probability", style={"fontWeight": "700", "fontSize": "15px"}),
+                html.Span("(dep only)", style={"color": "#6c757d", "fontSize": "12px", "marginLeft": "6px"}),
+            ], style={"display": "flex", "alignItems": "center", "marginBottom": "8px"}),
+            dcc.Slider(
+                id="slider_depolarizing_probability",
+                min=0.0,
+                max=0.5,
+                step=0.01,
+                value=0.1,
+                marks=None,
+                tooltip={"placement": "bottom", "always_visible": True},
+                className="noise-slider",
+            ),
+            html.Div([
+                html.Span("0.0", style={"fontSize": "12px", "color": "#6c757d"}),
+                html.Span("0.5", style={"fontSize": "12px", "color": "#6c757d"})
+            ], style={"display": "flex", "justifyContent": "space-between", "marginTop": "4px"})
+        ], style={"marginBottom": "22px"}),
+        html.Div([
+            html.Label("Damping Rate (gamma)", style={"fontWeight": "700", "fontSize": "15px", "marginBottom": "8px"}),
+            dcc.Slider(
+                id="slider_damping_rate",
+                min=0.0,
+                max=1.0,
+                step=0.01,
+                value=0.2,
+                marks=None,
+                tooltip={"placement": "bottom", "always_visible": True},
+                className="noise-slider",
+            ),
+            html.Div([
+                html.Span("0.0", style={"fontSize": "12px", "color": "#6c757d"}),
+                html.Span("1.0", style={"fontSize": "12px", "color": "#6c757d"})
+            ], style={"display": "flex", "justifyContent": "space-between", "marginTop": "4px"})
+        ]),
+    ], className="columnContainer noiseControls",
+        style={
+            "width": "340px",
+            "maxWidth": "360px",
+            "backgroundColor": "rgba(255, 255, 255, 0.98)",
+            "borderRadius": "12px",
+            "padding": "20px",
+            # "boxShadow": "0 6px 22px rgba(0, 0, 0, 0.08)",
+            # "border": "1px solid rgba(0, 0, 0, 0.05)"
+        }
     ),
+    ], className="noiseMainRow"),
     dcc.Interval(
         id="noise_animation_interval",
         interval=200,
         n_intervals=0
     ),
-], className="longContainer container")
+], className="container noiseSimulatorCard")
 
 # Overall
 layout_rows = [
@@ -297,6 +397,7 @@ layout_rows = [
     dcc.Store(id="test_datastore"),
     dcc.Store(id="model_parameters"),
     dcc.Store(id="noise_trajectory_store"),
+    dcc.Store(id="noise_qasm_store"),
     dcc.Store(id="noise_animation_state", data={"frame": 0, "version": None}),
     dcc.Store(id="metrics"),
     dcc.Store(id="quantum_state_store"),
