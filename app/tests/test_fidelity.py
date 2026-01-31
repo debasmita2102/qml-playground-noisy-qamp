@@ -5,7 +5,6 @@ from qiskit import QuantumCircuit
 from qiskit.quantum_info import Statevector, state_fidelity
 from qiskit_aer import AerSimulator
 
-
 from app.backends.noisy_ml_simulator import NoiseExtractor
 
 def _is_valid_density_matrix(rho, atol=1e-8):
