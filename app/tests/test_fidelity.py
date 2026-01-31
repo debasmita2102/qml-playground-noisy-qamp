@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from qiskit import QuantumCircuit
-from qiskit.quantum_info import Statevector, state_fidelity
+from qiskit.quantum_info import Statevector, state_fidelity, DensityMatrix
 from qiskit_aer import AerSimulator
 
 from app.backends.noisy_ml_simulator import NoiseExtractor
@@ -106,4 +106,35 @@ def test_noise_model_from_synthetic_calibration_2q():
     _is_valid_density_matrix(rho_noisy)
 
     fid = state_fidelity(rho_noisy, rho_ideal)
+    assert fid < 1.0
+
+def test_noisy_simulation_reduces_fidelity():
+    
+    qc = QuantumCircuit(1)
+    qc.h(0)
+    qc.save_density_matrix()
+    ideal_sim = AerSimulator(method="density_matrix")
+    ideal_dm = DensityMatrix(
+        ideal_sim.run(qc).result().data(0)["density_matrix"]
+    )
+
+    extractor = NoiseExtractor(
+        error_kind="depolarizing",
+        p_1qubit=0.2,
+    )
+    noise_model = extractor.build_noise_model_from_cal_simple(
+        {"gate_errors": {("global",): 0.1}}
+    )
+
+    noisy_sim = AerSimulator(
+        noise_model=noise_model,
+        method="density_matrix",
+    )
+    noisy_dm = DensityMatrix(
+        noisy_sim.run(qc).result().data(0)["density_matrix"]
+    )
+
+    fid = state_fidelity(ideal_dm, noisy_dm)
+
+    assert np.isclose(np.trace(noisy_dm.data), 1.0)
     assert fid < 1.0
