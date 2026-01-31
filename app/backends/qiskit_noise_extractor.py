@@ -27,6 +27,8 @@ else:
 
 __all__ = ["NoiseExtractor"]
 
+_logger = logging.getLogger(__name__)
+
 class NoiseExtractor:
     """Build and run simple noise models (depolarizing and/or amplitude damping/phase damping)
     using Qiskit Aer.
@@ -186,6 +188,163 @@ class NoiseExtractor:
                 pass
 
         return nm
+    @staticmethod
+    def _provider_from_env():
+        """
+        Build an IBM provider from common environment variables if present.
+        Uses QiskitRuntimeService (preferred for qiskit>=2.x).
+        Recognized env vars: QISKIT_IBM_TOKEN / IBM_QUANTUM_TOKEN, QISKIT_IBM_CHANNEL, QISKIT_IBM_INSTANCE, QISKIT_IBM_URL.
+        Returns None when no hints are set.
+        """
+        token = os.getenv("QISKIT_IBM_TOKEN") or os.getenv("IBM_QUANTUM_TOKEN") or None
+        channel = os.getenv("QISKIT_IBM_CHANNEL") or "ibm_quantum"
+        instance = os.getenv("QISKIT_IBM_INSTANCE") or None
+        url = os.getenv("QISKIT_IBM_URL") or os.getenv("QISKIT_RUNTIME_URL") or "https://quantum.cloud.ibm.com/"
+
+        if not token:
+            return None
+
+        # Avoid triggering urllib3 retries when DNS cannot resolve IBM hosts.
+        NoiseExtractor._ensure_ibm_dns()
+
+        try:
+            from qiskit_ibm_runtime import QiskitRuntimeService
+        except Exception as exc:
+            raise RuntimeError(f"Failed to import qiskit_ibm_runtime for env-based load: {exc}") from exc
+
+        kwargs = {"token": token, "channel": channel, "url": url}
+        if instance:
+            kwargs["instance"] = instance
+
+        return QiskitRuntimeService(**kwargs)
+
+    @staticmethod
+    def _ensure_ibm_dns(hosts=None):
+        """Raise a clear error if none of the IBM hosts can be resolved."""
+        hosts = hosts or ["quantum.cloud.ibm.com", "auth.quantum-computing.ibm.com"]
+        errors = []
+        for host in hosts:
+            try:
+                socket.gethostbyname(host)
+                return
+            except Exception as exc:
+                errors.append((host, exc))
+        raise RuntimeError(
+            "Cannot resolve IBM auth host(s): "
+            + "; ".join([f"{h} ({e})" for h, e in errors])
+            + ". Check network/DNS/proxy settings before using an IBM backend."
+        )
+
+    @staticmethod
+    def _load_ibm_backend(backend_name: str, provider_loader: Optional[Callable] = None, allow_fake_provider: bool = False):
+        """Fetch an IBM backend by name using either a supplied provider loader, the modern
+        qiskit-ibm-provider API, or the legacy IBMQ provider. Raises on failure so callers can
+        decide whether to fall back.
+        """
+
+        name = str(backend_name or "").strip()
+        if not name:
+            raise ValueError("backend_name must be a non-empty string")
+
+        errors = []
+        provider = None
+        env_token = os.getenv("QISKIT_IBM_TOKEN") or os.getenv("IBM_QUANTUM_TOKEN") or None
+
+        if provider_loader is not None:
+            try:
+                provider = provider_loader()
+            except Exception as exc:
+                errors.append(exc)
+
+        if provider is None:
+            try:
+                provider = NoiseExtractor._provider_from_env()
+            except Exception as exc:
+                errors.append(exc)
+
+        if provider is None and env_token:
+            try:
+                NoiseExtractor._ensure_ibm_dns()
+            except Exception as exc:
+                errors.append(exc)
+            else:
+                try:
+                    from qiskit_ibm_runtime import QiskitRuntimeService
+
+                    provider = QiskitRuntimeService()
+                except Exception as exc:
+                    errors.append(exc)
+
+        if provider is None and allow_fake_provider:
+            _logger.info("Using fake provider for backend '%s' (not connected to real IBM Quantum hardware)", name)
+            try:
+                from qiskit.providers.fake_provider import FakeProvider
+
+                fake_provider = FakeProvider()
+                try:
+                    return fake_provider.get_backend(name)
+                except Exception as exc:
+                    fb_list = fake_provider.backends()
+                    if fb_list:
+                        _logger.warning(
+                            "Requested backend '%s' unavailable; using fake backend '%s' instead",
+                            name,
+                            fb_list[0].name(),
+                        )
+                        return fb_list[0]
+            except Exception as exc:
+                errors.append(exc)
+
+        if provider is None:
+            if not errors:
+                if env_token:
+                    errors.append("No provider available; check qiskit-ibm-provider installation and credentials.")
+                else:
+                    errors.append("No provider_loader supplied and QISKIT_IBM_TOKEN not set.")
+            err_txt = "; ".join([str(e) for e in errors if e]) or "unknown error"
+            if any("ProviderV1" in str(e) for e in errors):
+                err_txt += " (detected missing ProviderV1; upgrade qiskit / qiskit-ibm-provider to matching versions)"
+            raise RuntimeError(
+                "Could not load IBM backend "
+                f"'{name}'. Install 'qiskit-ibm-runtime' (or qiskit-ibm-provider), set QISKIT_IBM_TOKEN/QISKIT_IBM_INSTANCE, "
+                f"or provide a custom provider_loader. Errors: {err_txt}"
+            )
+
+        try:
+            if hasattr(provider, "get_backend"):
+                return provider.get_backend(name)
+            if hasattr(provider, "backend"):
+                return provider.backend(name)
+            raise RuntimeError("Provider does not expose get_backend/backend API")
+        except Exception as exc:
+            raise RuntimeError(f"Backend '{name}' not found or unavailable from provider: {exc}") from exc
+
+    def load_ibm_backend(
+        self,
+        backend_name: Optional[str] = None,
+        provider_loader: Optional[Callable] = None,
+        allow_fake_provider: Optional[bool] = None,
+    ):
+        """
+        Public helper to fetch an IBM backend and rebuild the noise model. Useful when callers
+        want to defer backend loading or inject a custom provider loader after construction.
+        """
+        name = backend_name or self.ibm_backend_name
+        if not name:
+            raise ValueError("backend_name must be a non-empty string")
+        allow_fake_provider = self.allow_fake_provider if allow_fake_provider is None else allow_fake_provider
+
+        backend = self._load_ibm_backend(
+            name,
+            provider_loader=provider_loader or self._provider_loader,
+            allow_fake_provider=allow_fake_provider,
+        )
+        self.ibm_backend = backend
+        self.ibm_backend_name = name
+        self.ibm_backend_error = None
+        self.build_noise_from_backend(backend)
+        return backend
+
 
     def build_noise_from_backend(self, backend) -> NoiseModel:
         """Build a NoiseModel from a real backend object (requires IBM provider backend)."""

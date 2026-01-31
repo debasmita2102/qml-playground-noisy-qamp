@@ -2,13 +2,14 @@ import logging
 import json
 import time
 from io import StringIO
+from collections import Counter
 
 import pandas as pd
 import numpy as np
 import torch
 
 import dash
-from dash import ctx, clientside_callback
+from dash import ctx, html
 from dash.dependencies import Input, Output, State, ClientsideFunction
 
 from data.datasets_torch import create_dataset, create_target, classification_datasets, regression_datasets
@@ -20,8 +21,16 @@ from utils.serialization import serialize_quantum_states, unserialize_quantum_st
 from utils.trace_updates import create_extendData_dicts
 from utils.noise_simulator_mock import generate_mock_trajectories
 
+from backends.qiskit_noise_extractor import NoiseExtractor
+
 from layout import layout_overall
 from plotting import *
+
+# Try to import QuantumCircuit for QASM parsing
+try:
+    from qiskit import QuantumCircuit as _QC
+except ImportError:
+    _QC = None
 
 qml_app = dash.Dash(__name__, url_base_pathname='/qml-playground/', title="QML Playground")
 # Assign layout
@@ -445,25 +454,33 @@ def reset_results_plot(num_clicks: int, num_qubits: int, num_layers: int, select
 
 
 @qml_app.callback(
-    Output(component_id="noise_trajectory_store", component_property="data"),
+    [
+        Output(component_id="noise_trajectory_store", component_property="data"),
+        Output(component_id="noise_qasm_store", component_property="data"),
+    ],
     inputs=[
         Input(component_id="select_noise_type", component_property="value"),
         Input(component_id="slider_depolarizing_probability", component_property="value"),
         Input(component_id="slider_damping_rate", component_property="value"),
+        Input(component_id="select_noise_backend", component_property="value"),
     ],
     prevent_initial_call=False,
 )
 def update_noise_simulator(noise_type: str,
                            depolarizing_probability: float,
-                           damping_rate: float):
+                           damping_rate: float,
+                           backend_name: str):
     """
     Generate mock trajectories for ideal vs. noisy state evolution and store them for animation.
+    Respects the optional IBM backend selection to pull a real noise model when available.
     """
     if noise_type is None:
-        return dash.no_update
+        return dash.no_update, dash.no_update
 
     depolarizing_probability = depolarizing_probability or 0.0
     damping_rate = damping_rate or 0.0
+
+    backend_name = (backend_name or "").strip() or None
 
     try:
         trajectory_data = _generate_noise_trajectory_with_extractor(
@@ -474,17 +491,101 @@ def update_noise_simulator(noise_type: str,
         )
     except Exception as exc:
         logger.warning("NoiseExtractor trajectory failed: %s", exc)
-        return dash.no_update, dash.no_update
+        fallback_vec = [0.0, 0.0, 1.0]
+        trajectory_data = {
+            "ideal": [fallback_vec],
+            "noisy": [fallback_vec],
+            "time": [0],
+            "meta": {
+                "backend": backend_name or "synthetic",
+                "backend_error": str(exc),
+            },
+        }
 
-    trajectory_data["meta"] = trajectory_data.get("meta", {}) or {}
-    if backend_name:
-        trajectory_data["meta"]["backend"] = backend_name
+    trajectory_meta = trajectory_data.get("meta", {}) or {}
+    if backend_name and "backend" not in trajectory_meta:
+        trajectory_meta["backend"] = backend_name
+    trajectory_data["meta"] = trajectory_meta
 
     logger.debug("Stored trajectory meta: %s", trajectory_data.get("meta"))
     trajectory_data["version"] = time.time_ns()
 
     qasm_payload = trajectory_data.get("meta", {}).get("qiskit_qasm_str", None)
     return trajectory_data, qasm_payload
+
+
+def gate_scores_via_extractor(
+    noise_type: str,
+    depolarizing_probability: float = 0.0,
+    damping_rate: float = 0.0,
+    ibm_backend_name: str = None,
+    circuit=None,
+):
+    """
+    Lightweight gate importance heuristic based on gate counts and selected noise strength.
+    Returns list of {"gate": str, "score": float}.
+    """
+    noise_type = (noise_type or "").strip().lower()
+    error_kind = {
+        "depolarizing": "depolarizing",
+        "depol": "depolarizing",
+        "amplitude": "amplitude",
+        "amplitude_damping": "amplitude",
+        "phase": "phase",
+        "phase_damping": "phase",
+    }.get(noise_type, "depolarizing")
+
+    severity = float(depolarizing_probability or 0.0) if error_kind == "depolarizing" else float(damping_rate or 0.0)
+    if severity <= 0.0:
+        severity = 0.05
+
+    gate_counts = Counter()
+    if circuit is not None and hasattr(circuit, "count_ops"):
+        try:
+            gate_counts.update(circuit.count_ops())
+        except Exception as exc:
+            logger.debug("gate_scores_via_extractor: count_ops failed: %s", exc)
+
+    if not gate_counts:
+        gate_counts.update({"x": 1, "y": 1, "z": 1, "h": 1, "rx": 1, "ry": 1, "rz": 1, "cx": 2})
+
+    scores = []
+    for gate, count in gate_counts.items():
+        g = str(gate).lower()
+        weight = float(count) * severity
+        if g in ("cx", "cz", "swap", "crx", "cry", "crz"):
+            weight *= 1.2
+        if ibm_backend_name:
+            weight *= 1.05
+        scores.append({"gate": g, "score": float(weight)})
+
+    return scores
+
+
+@qml_app.callback(
+    Output(component_id="ibm_backend_status", component_property="children"),
+    inputs=[
+        Input(component_id="select_noise_backend", component_property="value"),
+        Input(component_id="noise_trajectory_store", component_property="data"),
+    ],
+    prevent_initial_call=False,
+)
+def update_ibm_status(backend_name: str, trajectory_data):
+    """
+    Simple status text for IBM backend selection, without overlay logic.
+    """
+    backend_name = (backend_name or "").strip()
+    if not backend_name:
+        return "Using local Aer noise model."
+
+    meta = (trajectory_data or {}).get("meta", {}) if trajectory_data else {}
+    t_backend = (meta.get("backend") or backend_name).strip()
+    backend_err = meta.get("backend_error")
+
+    if backend_err:
+        return f"IBM backend '{backend_name}' unavailable; using synthetic noise. ({backend_err})"
+
+    return f"Loaded noise model from IBM backend '{t_backend}'."
 
 
 @qml_app.callback(
@@ -518,17 +619,17 @@ def update_gate_importance_panel(noise_type: str,
             warning_msg = f"QASM parse failed ({exc})"
 
     scores = []
-    # try:
-    #     scores = gate_scores_via_extractor(
-    #         noise_type=noise_type,
-    #         depolarizing_probability=depolarizing_probability or 0.0,
-    #         damping_rate=damping_rate or 0.0,
-    #         ibm_backend_name=backend_name,
-    #         circuit=circuit,
-    #     ) or []
-    # except Exception as exc:
-    #     warning_msg = f"Gate scores unavailable ({exc})"
-    #     logger.warning("gate_scores_via_extractor failed: %s", exc)
+    try:
+        scores = gate_scores_via_extractor(
+            noise_type=noise_type,
+            depolarizing_probability=depolarizing_probability or 0.0,
+            damping_rate=damping_rate or 0.0,
+            ibm_backend_name=backend_name,
+            circuit=circuit,
+        ) or []
+    except Exception as exc:
+        warning_msg = f"Gate scores unavailable ({exc})"
+        logger.warning("gate_scores_via_extractor failed: %s", exc)
 
     def _score_band(score_val: float):
         if score_val > 0.5:
@@ -578,6 +679,137 @@ def update_gate_importance_panel(noise_type: str,
         blocks.append(html.Div("No gate scores available.", style={"fontSize": "12px", "color": "#6c757d"}))
 
     return blocks
+
+
+@qml_app.callback(
+    Output(component_id="noise_metrics_display", component_property="children"),
+    inputs=[
+        Input(component_id="noise_trajectory_store", component_property="data"),
+        Input(component_id="noise_animation_state", component_property="data"),
+    ],
+    prevent_initial_call=False,
+)
+def update_noise_metrics(trajectory_data, animation_state):
+    """Display real-time noise performance metrics with formulas."""
+    if trajectory_data is None or animation_state is None:
+        return html.Div("Loading...", style={
+            "color": "#999",
+            "fontSize": "11px",
+            "fontStyle": "italic",
+            "textAlign": "center",
+            "padding": "10px"
+        })
+    
+    frame_idx = animation_state.get("frame", 0)
+    
+    try:
+        metrics = _compute_noise_metrics(trajectory_data, frame_idx)
+        
+        metric_cards = [
+            # Fidelity
+            html.Div([
+                html.Div("Fidelity", style={
+                    "fontWeight": "600",
+                    "color": "#2c3e50",
+                    "fontSize": "11px",
+                    "marginBottom": "4px"
+                }),
+                html.Div(f"{metrics['fidelity']:.4f}", style={
+                    "color": "#27ae60",
+                    "fontWeight": "700",
+                    "fontSize": "18px",
+                    "marginBottom": "4px"
+                }),
+                html.Div("F = |⟨ψ|ψ'⟩|²", style={
+                    "fontSize": "11px",
+                    "color": "#7f8c8d",
+                    "fontFamily": "monospace"
+                }),
+            ], style={
+                "flex": "1",
+                "padding": "10px",
+                "borderLeft": "3px solid #27ae60",
+                "backgroundColor": "#f8f9fa",
+                "borderRadius": "4px",
+                "textAlign": "center"
+            }),
+            
+            # Purity
+            html.Div([
+                html.Div("Purity", style={
+                    "fontWeight": "600",
+                    "color": "#2c3e50",
+                    "fontSize": "11px",
+                    "marginBottom": "4px"
+                }),
+                html.Div(f"{metrics['purity']:.4f}", style={
+                    "color": "#3498db",
+                    "fontWeight": "700",
+                    "fontSize": "18px",
+                    "marginBottom": "4px"
+                }),
+                html.Div("P = Tr(ρ²)", style={
+                    "fontSize": "11px",
+                    "color": "#7f8c8d",
+                    "fontFamily": "monospace"
+                }),
+            ], style={
+                "flex": "1",
+                "padding": "10px",
+                "borderLeft": "3px solid #3498db",
+                "backgroundColor": "#f8f9fa",
+                "borderRadius": "4px",
+                "textAlign": "center"
+            }),
+        ]
+        
+        # Add Classification Accuracy if available
+        if metrics.get('classification_accuracy') is not None:
+            metric_cards.append(
+                html.Div([
+                    html.Div("Accuracy", style={
+                        "fontWeight": "600",
+                        "color": "#2c3e50",
+                        "fontSize": "11px",
+                        "marginBottom": "4px"
+                    }),
+                    html.Div(f"{metrics['classification_accuracy']:.1%}", style={
+                        "color": "#f39c12",
+                        "fontWeight": "700",
+                        "fontSize": "18px",
+                        "marginBottom": "4px"
+                    }),
+                    html.Div("correct/total", style={
+                        "fontSize": "11px",
+                        "color": "#7f8c8d",
+                        "fontFamily": "monospace"
+                    }),
+                ], style={
+                    "flex": "1",
+                    "padding": "10px",
+                    "borderLeft": "3px solid #f39c12",
+                    "backgroundColor": "#f8f9fa",
+                    "borderRadius": "4px",
+                    "textAlign": "center"
+                })
+            )
+        
+        metrics_display = html.Div(metric_cards, style={
+            "display": "flex",
+            "gap": "10px",
+            "justifyContent": "space-between"
+        })
+        
+        return metrics_display
+    except Exception as exc:
+        logger.warning("Failed to compute noise metrics: %s", exc)
+        return html.Div("Metrics unavailable", style={
+            "color": "#e74c3c",
+            "fontSize": "11px",
+            "fontStyle": "italic",
+            "textAlign": "center",
+            "padding": "10px"
+        })
 
 
 @qml_app.callback(

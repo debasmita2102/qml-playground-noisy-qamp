@@ -81,7 +81,13 @@ def make_state_space_model_plot(num_qubits, states, labels, num_layers, targets=
 
 def make_noise_comparison_plot(ideal_states=None, noisy_states=None):
     """Wrapper to build the ideal vs. noisy Bloch sphere visualization."""
-    return make_bloch_comparison_plot(ideal_states, noisy_states)
+    fig = make_bloch_comparison_plot(ideal_states, noisy_states)
+    # Remove margins to eliminate white space
+    fig.update_layout(
+        margin=dict(l=0, r=0, t=20, b=0),
+        height=280
+    )
+    return fig
 
 
 def make_state_traces(num_qubits, states, labels, num_classes=None):
