@@ -1,10 +1,6 @@
 [![DOI](https://img.shields.io/badge/DOI-10.1109/MCG.2024.3456288-yellow)](https://doi.ieeecomputersociety.org/10.1109/MCG.2024.3456288)
 [![arXiv](https://img.shields.io/badge/arXiv-2507.17931-b31b1b.svg?style=flat)](https://arxiv.org/abs/2507.17931)
 
-<p align="center">
-  <img src="QMLPG_Visual.png" alt="QML Playground Illustration" width="200"/>
-</p>
-
 # Quantum Machine Learning Playground
 
 The **Quantum Machine Learning (QML) Playground** is an interactive web application designed to visualize and explore the inner workings of quantum machine learning models in an intuitive and educational way. Inspired by classical tools like TensorFlow Playground, it focuses on parameterized quantum circuits (PQCs) — particularly the *data re-uploading universal quantum classifier* — and introduces visual metaphors such as Bloch spheres and the **Q-simplex** to interpret quantum state evolution.
@@ -22,12 +18,6 @@ This playground is ideal for learners, educators, and researchers who want to ex
 <p align="center">
   <img src="QML.gif" alt="Screenshot of the QML Playground" width="700"/>
 </p>
-
-Explore the QML Playground directly in your browser:
-
-👉 **[Try the Live Demo](https://websites.fraunhofer.de/qml-playground/)**
-
-No installation required — perfect for quick experimentation, education, and outreach.
 
 ---
 
