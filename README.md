@@ -11,6 +11,8 @@ The **Quantum Machine Learning (QML) Playground** is an interactive web applicat
 
 Now extended beyond classification, the playground also supports **regression tasks**, **uncertainty quantification**, and **regularization techniques**, enabling deeper exploration of quantum model performance and generalization.
 
+Beyond basic model training, the playground now provides noise-aware analysis, robustness diagnostics, and gate-level sensitivity insights, enabling users to explore not only how quantum models learn, but also how they fail under realistic noise.
+
 This playground is ideal for learners, educators, and researchers who want to explore QML models without requiring deep expertise in quantum hardware or simulators.
 
 ---
@@ -18,7 +20,7 @@ This playground is ideal for learners, educators, and researchers who want to ex
 ## 🌐 Live Demo
 
 <p align="center">
-  <img src="QMLPG_GUI.png" alt="Screenshot of the QML Playground" width="700"/>
+  <img src="QML.gif" alt="Screenshot of the QML Playground" width="700"/>
 </p>
 
 Explore the QML Playground directly in your browser:
@@ -56,12 +58,36 @@ This model was chosen because it is:
 * 📊 **Interactive Performance Metrics and Learning Curves**
 * 🎯 **Decision Boundary Visualizations (for classification)**
 * 🧪 **Flexible Dataset Generation and Hyperparameter Controls**
-
-### 📈 New in the Latest Version
-
 * 🔢 **Regression Task Support** – Go beyond classification to predict continuous target values using quantum circuits
 * ⚖️ **Regularization Options** – Add L1/L2 penalties to study overfitting and model smoothness
 * 🌫️ **Uncertainty Quantification (for Regression)** – Visualize predictive uncertainty through sampling-based variance estimation, highlighting how model confidence varies across the input space
+
+### 🧪 Noise, Robustness & Sensitivity Analysis (New)
+
+The playground now includes **explicit noise modeling and robustness analysis**, enabling realistic evaluation of QML models.
+
+#### 🔊 Noise Modeling
+- Depolarizing noise
+- Amplitude damping
+- Synthetic backend-inspired noise
+- Optional IBM backend calibration data
+
+#### 🧠 Noisy Simulation
+- Density-matrix simulation
+- Ideal vs noisy execution comparison
+- Fidelity and purity tracking
+
+#### 🎯 Gate Sensitivity Analysis
+- Gate importance scoring based on fidelity degradation
+- Per-gate contribution to overall performance loss
+- Identification of noise-critical gates and layers
+
+#### 📉 Noise Metrics
+- State fidelity
+- Purity
+- Entropy
+- Bloch-vector degradation
+
 
 ### 🐳 Deployment & Accessibility
 
