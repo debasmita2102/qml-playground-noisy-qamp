@@ -22,6 +22,8 @@ from utils.trace_updates import create_extendData_dicts
 from utils.noise_simulator_mock import generate_mock_trajectories
 
 from backends.qiskit_noise_extractor import NoiseExtractor
+from qiskit_aer import AerSimulator
+from qiskit.quantum_info import DensityMatrix, state_fidelity
 
 from layout import layout_overall
 from plotting import *
@@ -515,49 +517,89 @@ def update_noise_simulator(noise_type: str,
 
 
 def gate_scores_via_extractor(
+    *,
     noise_type: str,
-    depolarizing_probability: float = 0.0,
-    damping_rate: float = 0.0,
-    ibm_backend_name: str = None,
-    circuit=None,
+    depolarizing_probability: float | None,
+    damping_rate: float | None,
+    ibm_backend_name: str | None,
+    quantum_circuit,
 ):
     """
-    Lightweight gate importance heuristic based on gate counts and selected noise strength.
-    Returns list of {"gate": str, "score": float}.
+    Heuristic gate importance based on fidelity drop attribution.
+    Returns:
+    [
+      {"gate": "ry", "count": 3, "score": 0.23},
+      ...
+    ]
     """
-    noise_type = (noise_type or "").strip().lower()
-    error_kind = {
-        "depolarizing": "depolarizing",
-        "depol": "depolarizing",
-        "amplitude": "amplitude",
-        "amplitude_damping": "amplitude",
-        "phase": "phase",
-        "phase_damping": "phase",
-    }.get(noise_type, "depolarizing")
 
-    severity = float(depolarizing_probability or 0.0) if error_kind == "depolarizing" else float(damping_rate or 0.0)
-    if severity <= 0.0:
-        severity = 0.05
+    # ---- guard: no circuit ----
+    if quantum_circuit is None:
+        return []
 
-    gate_counts = Counter()
-    if circuit is not None and hasattr(circuit, "count_ops"):
-        try:
-            gate_counts.update(circuit.count_ops())
-        except Exception as exc:
-            logger.debug("gate_scores_via_extractor: count_ops failed: %s", exc)
+    noise_type = (noise_type or "depolarizing").lower()
+    p_dep = float(depolarizing_probability or 0.0)
+    p_damp = float(damping_rate or 0.0)
 
-    if not gate_counts:
-        gate_counts.update({"x": 1, "y": 1, "z": 1, "h": 1, "rx": 1, "ry": 1, "rz": 1, "cx": 2})
+    # ---- map parameters correctly ----
+    extractor_kwargs = dict(error_kind=noise_type)
+
+    if noise_type == "depolarizing":
+        extractor_kwargs["p_1qubit"] = p_dep
+    elif noise_type == "amplitude_damping":
+        extractor_kwargs["p_amp"] = p_damp
+    elif noise_type == "phase_damping":
+        extractor_kwargs["p_phase"] = p_damp
+
+    extractor = NoiseExtractor(**extractor_kwargs)
+
+    ideal_qc = quantum_circuit.copy()
+    ideal_qc.save_density_matrix()
+
+    ideal_sim = AerSimulator(method="density_matrix")
+    ideal_result = ideal_sim.run(ideal_qc).result()
+    rho_ideal = DensityMatrix(
+        ideal_result.data(0)["density_matrix"]
+    )
+
+    if ibm_backend_name:
+        backend = extractor.get_backend(ibm_backend_name)
+        cal = extractor.get_backend_calibration_simple(backend)
+        noise_model = extractor.build_noise_model_from_cal_simple(cal)
+    else:
+        noise_model = extractor.build_noise_model_from_cal_simple(
+            {"gate_errors": {}}
+        )
+
+    noisy_qc = quantum_circuit.copy()
+    noisy_qc.save_density_matrix()
+
+    noisy_sim = AerSimulator(
+        noise_model=noise_model,
+        method="density_matrix",
+    )
+    noisy_result = noisy_sim.run(noisy_qc).result()
+    rho_noisy = DensityMatrix(
+        noisy_result.data(0)["density_matrix"]
+    )
+
+    fid = float(state_fidelity(rho_ideal, rho_noisy))
+    fid = np.clip(fid, 0.0, 1.0)
+    total_damage = 1.0 - fid
+
+    gate_counts = Counter(inst.name for inst, _, _ in quantum_circuit.data)
+    total_gates = sum(gate_counts.values())
+
+    if total_gates == 0 or total_damage == 0.0:
+        return []
 
     scores = []
     for gate, count in gate_counts.items():
-        g = str(gate).lower()
-        weight = float(count) * severity
-        if g in ("cx", "cz", "swap", "crx", "cry", "crz"):
-            weight *= 1.2
-        if ibm_backend_name:
-            weight *= 1.05
-        scores.append({"gate": g, "score": float(weight)})
+        scores.append({
+            "gate": gate,
+            "count": count,
+            "score": float(total_damage * (count / total_gates)),
+        })
 
     return scores
 
@@ -625,7 +667,7 @@ def update_gate_importance_panel(noise_type: str,
             depolarizing_probability=depolarizing_probability or 0.0,
             damping_rate=damping_rate or 0.0,
             ibm_backend_name=backend_name,
-            circuit=circuit,
+            quantum_circuit=circuit,
         ) or []
     except Exception as exc:
         warning_msg = f"Gate scores unavailable ({exc})"
