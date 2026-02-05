@@ -1,7 +1,7 @@
 from qiskit_aer import AerSimulator
 from qiskit.quantum_info import DensityMatrix, state_fidelity
 import numpy as np
-from qiskit_noise_extractor import NoiseExtractor
+from app.backends.qiskit_noise_extractor import NoiseExtractor
 
 
 __all__ = ["gate_scores_via_extractor"]
@@ -29,11 +29,16 @@ def gate_scores_via_extractor(
         p_amp=damping_rate,
     )
 
+    ideal_qc = quantum_circuit.copy()
+    ideal_qc.save_density_matrix()
+
     ideal_sim = AerSimulator(method="density_matrix")
-    ideal_result = ideal_sim.run(quantum_circuit).result()
+    ideal_result = ideal_sim.run(ideal_qc).result()
+
     rho_ideal = DensityMatrix(
         ideal_result.data(0)["density_matrix"]
     )
+
 
     if ibm_backend_name:
         backend = extractor.get_backend(ibm_backend_name)
@@ -44,11 +49,15 @@ def gate_scores_via_extractor(
             {"gate_errors": {}}
         )
 
+    noisy_qc = quantum_circuit.copy()
+    noisy_qc.save_density_matrix()
+
     noisy_sim = AerSimulator(
         noise_model=noise_model,
         method="density_matrix",
     )
-    noisy_result = noisy_sim.run(quantum_circuit).result()
+    noisy_result = noisy_sim.run(noisy_qc).result()
+
     rho_noisy = DensityMatrix(
         noisy_result.data(0)["density_matrix"]
     )
