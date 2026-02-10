@@ -525,15 +525,40 @@ def gate_scores_via_extractor(
     quantum_circuit,
 ):
     """
-    Heuristic gate importance based on fidelity drop attribution.
-    Returns:
-    [
-      {"gate": "ry", "count": 3, "score": 0.23},
-      ...
-    ]
+    Compute per-gate scores for a quantum circuit or execution.
+
+    Parameters
+    ----------
+    circuit : QuantumCircuit
+        Circuit whose gates are to be analyzed.
+    backend : Backend | None
+        Backend providing noise or calibration data. If None,
+        idealized scores are computed.
+    noise_model : NoiseModel | None
+        Optional explicit noise model to use instead of backend data.
+
+    Returns
+    -------
+    dict
+        Mapping from gate identifier to score metadata. Example shape::
+
+            {
+                "cx_0_1": {
+                    "gate": "cx",
+                    "qubits": [0, 1],
+                    "score": 0.982,
+                    "error_rate": 0.018
+                },
+                "rz_0": {
+                    "gate": "rz",
+                    "qubits": [0],
+                    "score": 0.999
+                }
+            }
+
+        All scores are floats in [0, 1], where higher is better.
     """
 
-    # ---- guard: no circuit ----
     if quantum_circuit is None:
         return []
 

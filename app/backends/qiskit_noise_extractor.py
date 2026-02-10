@@ -228,7 +228,14 @@ class NoiseExtractor:
             provider = FakeProvider()
 
         if provider is None:
-            raise RuntimeError(f"Cannot load IBM backend: {errors}")
+            error_msg = "; ".join(str(e) for e in errors)
+            raise RuntimeError(
+                "Cannot load IBM backend. "
+                f"Encountered the following errors: {error_msg}. "
+                "Please check that `qiskit-ibm-runtime` is installed and "
+                "that your IBM Quantum credentials are configured "
+                "(e.g., via `qiskit-ibm-runtime` login)."
+            )
 
         if hasattr(provider, "get_backend"):
             backend = provider.get_backend(name)
@@ -400,7 +407,7 @@ class NoiseExtractor:
 
     @staticmethod
     def _full_kron(op, target, n):
-        out = 1
+        out = np.array([[1.0]], dtype=complex)
         for q in reversed(range(n)):
             out = np.kron(out, op if q == target else np.eye(2))
         return out
@@ -416,6 +423,7 @@ class NoiseExtractor:
     def apply_local_noise(self, rho, targets=None):
         self._validate_density_matrix(rho)
         n = self._num_qubits(rho)
+        
         targets = range(n) if targets is None else targets
 
         if self.error_kind == "amplitude_damping":
